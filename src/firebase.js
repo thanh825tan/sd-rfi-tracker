@@ -6,6 +6,7 @@ const firebaseConfig = {
   // const firebaseConfig = {
   apiKey: "AIzaSyDNRRwe-8eX7JNGTpEHNhe_FFW3qR-bk6c",
   authDomain: "wealthcons-sd-rfi.firebaseapp.com",
+databaseURL: "https://wealthcons-sd-rfi-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "wealthcons-sd-rfi",
   storageBucket: "wealthcons-sd-rfi.firebasestorage.app",
   messagingSenderId: "307981863049",
