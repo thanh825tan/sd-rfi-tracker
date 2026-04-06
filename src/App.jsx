@@ -577,8 +577,8 @@ export default function App() {
           <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📐 SD Trạng thái</div>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <Donut data={ST.map(s => ({ l: s.l, v: sdItems.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
-              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = sdItems.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
+              <Donut data={ST.map(s => ({ l: s.l, v: sdItemsDash.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
+              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = sdItemsDash.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
             </div>
           </div>
           {/* Documents Overview - Stacked Bar */}
@@ -619,8 +619,8 @@ export default function App() {
           <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📝 RFI Trạng thái</div>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <Donut data={ST.map(s => ({ l: s.l, v: rfiItems.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
-              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = rfiItems.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
+              <Donut data={ST.map(s => ({ l: s.l, v: rfiItemsDash.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
+              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = rfiItemsDash.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
             </div>
           </div>
         </div>
