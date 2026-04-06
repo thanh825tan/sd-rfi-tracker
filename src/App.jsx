@@ -156,7 +156,8 @@ function parseCSV(text) {
 function mapRowToItem(row, index) {
   const r = {}; Object.entries(row).forEach(([k, v]) => { r[k.toLowerCase().replace(/\s+/g, "")] = v; });
   const code = r.code || r.ma || r.masd || r.marfi || r.mã || r.mãsd || r.mãrfi || "";
-  const type = code.toUpperCase().startsWith("RFI") ? "RFI" : "SD";
+  const rawType = (r.type || r.loai || r.loại || "").toUpperCase().trim();
+  const type = rawType === "RFI" ? "RFI" : rawType === "SD" ? "SD" : code.toUpperCase().startsWith("RFI") ? "RFI" : "SD";
   const rawStatus = (r.status || r.trangthai || r.trạngthái || r.tt || "").toLowerCase().trim();
   const status = STATUS_MAP[rawStatus] || ST.find(s => s.k === rawStatus.toUpperCase())?.k || "DANG_VE";
   const rawDept = (r.dept || r.bophan || r.bộphận || r.bp || "").toLowerCase().trim();
@@ -186,9 +187,10 @@ function mapRowToItem(row, index) {
 }
 
 // ─── Export helpers ───
-function itemsToCSV(items) {
+function itemsToCSV(items, filterType) {
   const headers = ["Loại", "Mã", "Tên", "Block", "Tầng", "Bộ phận", "Hạng mục", "Người vẽ", "Đệ trình", "Trạng thái", "Rủi ro", "KH nộp", "TT nộp", "Offset", "KH duyệt", "Trễ (ngày)", "Rev", "Ghi chú"];
-  const rows = items.map(it => {
+  const src = filterType ? items.filter(i => i.type === filterType) : items;
+  const rows = src.map(it => {
     const st = ST.find(s => s.k === it.status); const r = rsk(it); const rc = RC[r]; const l = ld(it);
     const notesText = (it.notes || []).map(n => `[${n.d} ${n.h}] ${n.t}${n.file ? ` [File: ${n.file.name}]` : ""}`).join(" | ");
     return [it.type, it.code, it.name, it.block, it.floor, it.dept || "", it.cat, it.who, it.sub, st?.l || it.status, rc?.l || r, it.planDate || "", it.actualDate || "", it.offset, ad(it.planDate, it.offset) || "", l != null ? l : "", it.rev, notesText];
@@ -313,7 +315,8 @@ function ImportModal({ onImport, onClose }) {
 
 // ─── Export Menu ───
 function ExportMenu({ items, stats, onClose }) {
-  const downloadCSV = () => { const BOM = "\uFEFF"; const blob = new Blob([BOM + itemsToCSV(items)], { type: "text/csv;charset=utf-8" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `SD-RFI-Tracker_${td()}.csv`; a.click(); onClose(); };
+  const downloadCSV = (filterType) => { const BOM = "\uFEFF"; const label = filterType || "ALL"; const blob = new Blob([BOM + itemsToCSV(items, filterType)], { type: "text/csv;charset=utf-8" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `SD-RFI-Tracker_${label}_${td()}.csv`; a.click(); if (!filterType) onClose(); };
+  const downloadBoth = () => { downloadCSV("SD"); setTimeout(() => { downloadCSV("RFI"); onClose(); }, 300); };
   const openGoogleSheet = () => { downloadCSV(); setTimeout(() => window.open("https://sheets.google.com/create", "_blank"), 500); };
   const downloadReport = () => { const blob = new Blob([generateReportHTML(items, stats)], { type: "text/html;charset=utf-8" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `Bao-cao-SD-RFI_${td()}.html`; a.click(); onClose(); };
   const previewReport = () => { const blob = new Blob([generateReportHTML(items, stats)], { type: "text/html;charset=utf-8" }); window.open(URL.createObjectURL(blob), "_blank"); onClose(); };
@@ -323,7 +326,8 @@ function ExportMenu({ items, stats, onClose }) {
       <div style={{ background: "#1E293B", borderRadius: 12, padding: 20, width: "100%", maxWidth: 440 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><h2 style={{ fontSize: 16, fontWeight: 800 }}>📤 Xuất dữ liệu</h2><button onClick={onClose} style={{ background: "none", border: "none", color: "#64748B", fontSize: 18, cursor: "pointer" }}>✕</button></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <button onClick={downloadCSV} style={B}><span style={{ fontSize: 24 }}>📊</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Tải CSV</div><div style={{ fontSize: 11, color: "#64748B" }}>Tải file .csv — mở bằng Excel hoặc import Google Sheets</div></div></button>
+          <button onClick={() => downloadCSV()} style={B}><span style={{ fontSize: 24 }}>📊</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Tải CSV (Tất cả)</div><div style={{ fontSize: 11, color: "#64748B" }}>Tải 1 file .csv chứa cả SD & RFI</div></div></button>
+          <button onClick={downloadBoth} style={B}><span style={{ fontSize: 24 }}>📂</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Tải CSV tách riêng SD & RFI</div><div style={{ fontSize: 11, color: "#64748B" }}>Tải 2 file .csv riêng — SD và RFI</div></div></button>
           <button onClick={openGoogleSheet} style={B}><span style={{ fontSize: 24 }}>📋</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Xuất Google Sheets</div><div style={{ fontSize: 11, color: "#64748B" }}>Tải CSV + mở Google Sheets mới</div></div></button>
           <button onClick={previewReport} style={B}><span style={{ fontSize: 24 }}>🌐</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Xem báo cáo HTML</div><div style={{ fontSize: 11, color: "#64748B" }}>Mở tab mới — in PDF bằng Ctrl+P</div></div></button>
           <button onClick={downloadReport} style={B}><span style={{ fontSize: 24 }}>💾</span><div><div style={{ fontWeight: 700, fontSize: 13 }}>Tải báo cáo HTML</div><div style={{ fontSize: 11, color: "#64748B" }}>Tải file .html để gửi email</div></div></button>
@@ -342,6 +346,8 @@ export default function App() {
   const [dashFl, setDashFl] = useState({ bl: "ALL", fl: "ALL", ct: "ALL", dp: "ALL" });
   const [showImport, setShowImport] = useState(false); const [showExport, setShowExport] = useState(false);
   const [toast, setToast] = useState(null);
+  const [sortCol, setSortCol] = useState(null); const [sortDir, setSortDir] = useState("asc");
+  const [selected, setSelected] = useState(new Set());
   const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
 
   useEffect(() => { const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }); return () => unsub(); }, []);
@@ -385,6 +391,26 @@ export default function App() {
     if (fl.q) { const s = fl.q.toLowerCase(); return `${it.code} ${it.name} ${it.block} ${it.floor} ${it.cat} ${it.dept} ${it.who} ${it.sub}`.toLowerCase().includes(s); }
     return true;
   }), [items, tab, fl]);
+
+  // Sort logic
+  const SORT_KEYS = { "Mã": "code", "Tên": "name", "Block": "block", "Tầng": "floor", "BP": "dept", "HM": "cat", "Người vẽ": "who", "Đệ trình": "sub", "TT": "status", "KH": "planDate", "TT nộp": "actualDate", "Duyệt": "_approvalDate", "Trễ": "_late" };
+  const toggleSort = (colLabel) => { const key = SORT_KEYS[colLabel]; if (!key) return; if (sortCol === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); } else { setSortCol(key); setSortDir("asc"); } };
+  const sorted = useMemo(() => {
+    if (!sortCol) return flt;
+    return [...flt].sort((a, b) => {
+      let va, vb;
+      if (sortCol === "_approvalDate") { va = ad(a.planDate, a.offset) || ""; vb = ad(b.planDate, b.offset) || ""; }
+      else if (sortCol === "_late") { va = ld(a) ?? -1; vb = ld(b) ?? -1; return sortDir === "asc" ? va - vb : vb - va; }
+      else { va = a[sortCol] ?? ""; vb = b[sortCol] ?? ""; }
+      if (typeof va === "number" && typeof vb === "number") return sortDir === "asc" ? va - vb : vb - va;
+      return sortDir === "asc" ? String(va).localeCompare(String(vb), "vi") : String(vb).localeCompare(String(va), "vi");
+    });
+  }, [flt, sortCol, sortDir]);
+
+  // Selection handlers
+  const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleSelectAll = () => { const ids = sorted.map(i => i.id); if (ids.every(id => selected.has(id))) { setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n; }); } else { setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n; }); } };
+  const deleteSelected = () => { if (!selected.size) return; if (!window.confirm(`Xóa ${selected.size} mục đã chọn?`)) return; selected.forEach(id => dl(id)); setSelected(new Set()); showToast(`Đã xóa ${selected.size} mục`); };
 
   const stats = useMemo(() => {
     const src = dashItems; const bS = {}, bR = { late: 0, high: 0, med: 0, ok: 0, done: 0, reject: 0, none: 0 }, bB = {}, bC = {}, bP = {}, bD = {};
@@ -512,29 +538,42 @@ export default function App() {
           <select value={fl.rk} onChange={e => setFl(f => ({ ...f, rk: e.target.value }))} style={ss}><option value="ALL">Rủi ro</option>{Object.entries(RC).map(([k, v]) => <option key={k} value={k}>{v.i}{v.l}</option>)}</select>
           {Object.values(fl).some(v => v !== "ALL" && v !== "") && <button onClick={() => setFl({ st: "ALL", rk: "ALL", bl: "ALL", ct: "ALL", wh: "ALL", fl: "ALL", dp: "ALL", q: "" })} style={{ ...ss, color: "#F87171", border: "1px solid #F87171", cursor: "pointer" }}>✕</button>}
         </div>
-        <div style={{ fontSize: 11, color: "#64748B" }}>{flt.length} kết quả</div>
+        <div style={{ fontSize: 11, color: "#64748B", display: "flex", alignItems: "center", gap: 8 }}>
+          {sorted.length} kết quả
+          {selected.size > 0 && <button onClick={deleteSelected} style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #7F1D1D", background: "#FEE2E2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🗑 Xóa {selected.size} mục</button>}
+          {sortCol && <span style={{ color: "#3B82F6", fontSize: 10 }}>Sắp xếp: {Object.entries(SORT_KEYS).find(([,v]) => v === sortCol)?.[0]} {sortDir === "asc" ? "↑" : "↓"} <button onClick={() => { setSortCol(null); setSortDir("asc"); }} style={{ background: "none", border: "none", color: "#F87171", cursor: "pointer", fontSize: 10 }}>✕</button></span>}
+        </div>
         <div style={{ overflowX: "auto", borderRadius: 8, border: "1px solid #1E293B" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead><tr style={{ background: "#1E293B" }}>{["", "Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "Đệ trình", "TT", "KH", "TT nộp", "Duyệt", "Trễ", "🔗", "📝"].map((h, i) => <th key={i} style={{ padding: "8px 4px", textAlign: "left", fontWeight: 600, color: "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10 }}>{h}</th>)}</tr></thead>
-            <tbody>{!flt.length ? <tr><td colSpan={16} style={{ padding: 30, textAlign: "center", color: "#475569" }}>Không có dữ liệu</td></tr> :
-              flt.map(it => { const r = rsk(it), rc = RC[r], st = ST.find(s => s.k === it.status), l = ld(it), lk = (it.links || []).map(lid => items.find(x => x.id === lid)).filter(Boolean); const dpt = DEPTS.find(d => d.k === it.dept);
-                return <tr key={it.id} onClick={() => setDetId(it.id)} style={{ cursor: "pointer", borderBottom: "1px solid #1E293B" }} onMouseEnter={e => e.currentTarget.style.background = "#1E293B"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                  <td style={{ padding: "6px 4px" }}>{rc.i}</td>
-                  <td style={{ padding: "6px 4px", fontWeight: 700, fontFamily: "'JetBrains Mono'", fontSize: 10, whiteSpace: "nowrap" }}>{it.code || "—"}</td>
-                  <td style={{ padding: "6px 4px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}>{it.block || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}>{it.floor || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}><Bd c={dpt?.c || "#6B7280"} bg={dpt?.bg || "#F3F4F6"}>{it.dept || "—"}</Bd></td>
-                  <td style={{ padding: "6px 4px" }}>{it.cat || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}>{it.who || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}>{it.sub || "—"}</td>
-                  <td style={{ padding: "6px 4px" }}><Bd c={st?.c} bg={st?.bg}>{st?.l}</Bd></td>
-                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }}>{fm(it.planDate)}</td>
-                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }}>{fm(it.actualDate)}</td>
-                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }}>{fm(ad(it.planDate, it.offset))}</td>
-                  <td style={{ padding: "6px 4px" }}>{l > 0 ? <Bd c="#DC2626" bg="#FEE2E2">+{l}</Bd> : l === 0 ? <span style={{ color: "#64748B" }}>0</span> : "—"}</td>
-                  <td style={{ padding: "6px 4px" }}>{lk.length > 0 && <span style={{ color: "#3B82F6" }}>🔗{lk.length}</span>}</td>
-                  <td style={{ padding: "6px 4px" }}>{(it.notes || []).length > 0 && <span style={{ color: "#D97706" }}>📝{it.notes.length}</span>}</td>
+            <thead><tr style={{ background: "#1E293B" }}>
+              <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", width: 28 }}><input type="checkbox" checked={sorted.length > 0 && sorted.every(i => selected.has(i.id))} onChange={toggleSelectAll} style={{ cursor: "pointer" }} /></th>
+              <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", width: 20 }}></th>
+              {["Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "Đệ trình", "TT", "KH", "TT nộp", "Duyệt", "Trễ"].map((h, i) => <th key={i} onClick={() => toggleSort(h)} style={{ padding: "8px 4px", textAlign: "left", fontWeight: 600, color: SORT_KEYS[h] ? "#94A3B8" : "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10, cursor: SORT_KEYS[h] ? "pointer" : "default", userSelect: "none" }}>{h}{sortCol === SORT_KEYS[h] ? (sortDir === "asc" ? " ↑" : " ↓") : ""}</th>)}
+              <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", fontSize: 10, color: "#64748B" }}>🔗</th>
+              <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", fontSize: 10, color: "#64748B" }}>📝</th>
+            </tr></thead>
+            <tbody>{!sorted.length ? <tr><td colSpan={17} style={{ padding: 30, textAlign: "center", color: "#475569" }}>Không có dữ liệu</td></tr> :
+              sorted.map(it => { const r = rsk(it), rc = RC[r], st = ST.find(s => s.k === it.status), l = ld(it), lk = (it.links || []).map(lid => items.find(x => x.id === lid)).filter(Boolean); const dpt = DEPTS.find(d => d.k === it.dept);
+                return <tr key={it.id} style={{ cursor: "pointer", borderBottom: "1px solid #1E293B", background: selected.has(it.id) ? "#1E3A5F" : "transparent" }} onMouseEnter={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "#1E293B"; }} onMouseLeave={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "transparent"; }}>
+                  <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} style={{ cursor: "pointer" }} /></td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{rc.i}</td>
+                  <td style={{ padding: "6px 4px", fontWeight: 700, fontFamily: "'JetBrains Mono'", fontSize: 10, whiteSpace: "nowrap" }} onClick={() => setDetId(it.id)}>{it.code || "—"}</td>
+                  <td style={{ padding: "6px 4px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => setDetId(it.id)}>{it.name || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.block || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.floor || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}><Bd c={dpt?.c || "#6B7280"} bg={dpt?.bg || "#F3F4F6"}>{it.dept || "—"}</Bd></td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.cat || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.who || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.sub || "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}>
+                    <select value={it.status} onChange={e => { updateItem(it.id, { status: e.target.value }); }} style={{ padding: "2px 4px", borderRadius: 8, border: "none", background: st?.bg || "#F3F4F6", color: st?.c || "#6B7280", fontSize: 10, fontWeight: 600, cursor: "pointer", outline: "none", appearance: "auto" }}>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
+                  </td>
+                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.planDate)}</td>
+                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.actualDate)}</td>
+                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(ad(it.planDate, it.offset))}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{l > 0 ? <Bd c="#DC2626" bg="#FEE2E2">+{l}</Bd> : l === 0 ? <span style={{ color: "#64748B" }}>0</span> : "—"}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{lk.length > 0 && <span style={{ color: "#3B82F6" }}>🔗{lk.length}</span>}</td>
+                  <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{(it.notes || []).length > 0 && <span style={{ color: "#D97706" }}>📝{it.notes.length}</span>}</td>
                 </tr>; })}</tbody>
           </table>
         </div>
