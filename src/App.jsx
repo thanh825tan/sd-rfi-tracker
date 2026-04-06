@@ -446,6 +446,37 @@ export default function App() {
   const pct = stats.tot ? Math.round(done / stats.tot * 100) : 0;
   const sData = ST.map(s => ({ l: s.l, v: stats.bS[s.k] || 0, c: s.c }));
   const rData = Object.entries(RC).filter(([k]) => k !== "none").map(([k, v]) => ({ l: v.l, v: stats.bR[k] || 0, c: v.c }));
+
+  // Dashboard computed - theo layout hình ảnh
+  const sdItems = useMemo(() => dashItems.filter(i => i.type === "SD"), [dashItems]);
+  const rfiItems = useMemo(() => dashItems.filter(i => i.type === "RFI"), [dashItems]);
+  const sdApproved = sdItems.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
+  const sdPending = sdItems.filter(i => ["CHO_REVIEW", "CHO_DUYET", "DANG_VE"].includes(i.status)).length;
+  const sdOverdue = sdItems.filter(i => rsk(i) === "late").length;
+  const rfiClosed = rfiItems.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
+  const rfiOpen = rfiItems.filter(i => !["DA_DUYET", "DUYET_GC", "REJECT"].includes(i.status)).length;
+  const rfiOverdue = rfiItems.filter(i => rsk(i) === "late").length;
+  const totalOverdue = stats.bR.late;
+  const sdPct = sdItems.length ? Math.round(sdApproved / sdItems.length * 100) : 0;
+  const sdPendPct = sdItems.length ? Math.round(sdPending / sdItems.length * 100) : 0;
+  const sdOverduePct = sdItems.length ? Math.round(sdOverdue / sdItems.length * 100) : 0;
+  const rfiClosedPct = rfiItems.length ? Math.round(rfiClosed / rfiItems.length * 100) : 0;
+  const rfiOpenPct = rfiItems.length ? Math.round(rfiOpen / rfiItems.length * 100) : 0;
+  const rfiOverduePct = rfiItems.length ? Math.round(rfiOverdue / rfiItems.length * 100) : 0;
+  // Aging of open items
+  const openItems = useMemo(() => dashItems.filter(i => !["DA_DUYET", "DUYET_GC"].includes(i.status) && i.planDate), [dashItems]);
+  const aging = useMemo(() => {
+    const buckets = [0, 0, 0, 0]; // 0-3, 4-7, 8-14, >14
+    openItems.forEach(it => { const d = dd(td(), it.planDate); if (d === null || d <= 0) return; if (d <= 3) buckets[0]++; else if (d <= 7) buckets[1]++; else if (d <= 14) buckets[2]++; else buckets[3]++; });
+    return buckets;
+  }, [openItems]);
+  // Avg review time
+  const avgReview = useMemo(() => {
+    const completed = dashItems.filter(i => i.actualDate && i.planDate);
+    if (!completed.length) return { all: 0, civ: 0, mep: 0 };
+    const calc = (list) => { if (!list.length) return 0; const sum = list.reduce((s, i) => s + Math.abs(dd(i.actualDate, i.planDate) || 0), 0); return Math.round(sum / list.length * 10) / 10; };
+    return { all: calc(completed), civ: calc(completed.filter(i => i.dept === "CIV")), mep: calc(completed.filter(i => i.dept === "MEP")) };
+  }, [dashItems]);
   const ss = { padding: "5px 9px", borderRadius: 7, border: "1px solid #334155", background: "#1E293B", color: "#F1F5F9", fontSize: 12 };
   const hasDashFilter = dashFl.bl !== "ALL" || dashFl.fl !== "ALL" || dashFl.ct !== "ALL" || dashFl.dp !== "ALL";
 
@@ -462,7 +493,6 @@ export default function App() {
           <button onClick={() => { setEditId("nr"); setView("form"); }} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#8B5CF6,#EC4899)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ RFI</button>
           <button onClick={() => setShowImport(true)} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#059669", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>📥 Import</button>
           <button onClick={() => setShowExport(true)} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#0EA5E9", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>📤 Export</button>
-          <button onClick={() => { writeAllItems(samples()); setDetId(null); }} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#F59E0B", fontSize: 11, cursor: "pointer" }}>🔄 Reset</button>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
             {user.photoURL && <img src={user.photoURL} alt="" style={{ width: 26, height: 26, borderRadius: "50%" }} referrerPolicy="no-referrer" />}
             <span style={{ fontSize: 11, color: "#94A3B8", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.displayName || user.email}</span>
@@ -488,6 +518,7 @@ export default function App() {
 
       {/* DASHBOARD */}
       {view === "dash" && <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {/* Filter bar */}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "8px 12px", background: "#1E293B", borderRadius: 8 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginRight: 4 }}>🔍 Lọc:</span>
           <select value={dashFl.dp} onChange={e => setDashFl(f => ({ ...f, dp: e.target.value, ct: "ALL" }))} style={ss}><option value="ALL">Tất cả BP</option>{DEPTS.map(d => <option key={d.k} value={d.k}>{d.l}</option>)}</select>
@@ -496,19 +527,162 @@ export default function App() {
           <select value={dashFl.ct} onChange={e => setDashFl(f => ({ ...f, ct: e.target.value }))} style={ss}><option value="ALL">Tất cả HM</option>{dashCts.map(c => <option key={c}>{c}</option>)}</select>
           {hasDashFilter && <><button onClick={() => setDashFl({ bl: "ALL", fl: "ALL", ct: "ALL", dp: "ALL" })} style={{ ...ss, color: "#F87171", border: "1px solid #F87171", cursor: "pointer", fontSize: 11 }}>✕ Xóa lọc</button><span style={{ fontSize: 10, color: "#64748B" }}>({dashItems.length}/{items.length})</span></>}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 8 }}>
-          {[{ l: "SD", v: stats.sd, c: "#3B82F6", i: "📐" }, { l: "RFI", v: stats.rfi, c: "#8B5CF6", i: "📝" }, { l: "CIV", v: stats.bD.CIV || 0, c: "#F59E0B", i: "🏗️" }, { l: "MEP", v: stats.bD.MEP || 0, c: "#06B6D4", i: "⚡" }, { l: "Trễ", v: stats.bR.late, c: "#DC2626", i: "🔴" }, { l: "Nguy cơ", v: stats.bR.high, c: "#EA580C", i: "🟠" }, { l: "Duyệt", v: done, c: "#059669", i: "✅" }, { l: "Tỷ lệ", v: pct + "%", c: "#0891B2", i: "📈" }].map((c, i) =>
-            <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: "12px 14px", borderLeft: `3px solid ${c.c}` }}><div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 3 }}>{c.i} {c.l}</div><div style={{ fontSize: 22, fontWeight: 800, color: c.c, fontFamily: "'JetBrains Mono'" }}>{c.v}</div></div>)}
+
+        {/* ROW 1: Summary Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          {/* SD Card */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #2563EB" }}>
+            <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📐 Shop Drawings (SDs)</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{sdItems.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{sdPct}% Đã duyệt</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{sdPendPct}% Đang xử lý</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#DC2626" }}>🔴</span><span style={{ color: "#CBD5E1" }}>{sdOverduePct}% Trễ hạn</span></div>
+            </div>
+          </div>
+          {/* RFI Card */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #7C3AED" }}>
+            <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📝 RFIs</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#8B5CF6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{rfiItems.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{rfiClosedPct}% Đã đóng</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{rfiOpenPct}% Đang mở</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#DC2626" }}>🔴</span><span style={{ color: "#CBD5E1" }}>{rfiOverduePct}% Trễ hạn</span></div>
+            </div>
+          </div>
+          {/* Overdue Card */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #DC2626" }}>
+            <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>⚠️ Trễ hạn</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#DC2626", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{totalOverdue} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>📐</span><span style={{ color: "#CBD5E1" }}>{sdOverdue} SDs</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>📝</span><span style={{ color: "#CBD5E1" }}>{rfiOverdue} RFIs</span></div>
+            </div>
+          </div>
+          {/* Summary Card */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #0891B2" }}>
+            <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📊 Tổng quan</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#0EA5E9", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{pct}% <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Hoàn thành</span></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>🏗️</span><span style={{ color: "#CBD5E1" }}>CIV: {dashItems.filter(i => i.dept === "CIV").length}</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>⚡</span><span style={{ color: "#CBD5E1" }}>MEP: {dashItems.filter(i => i.dept === "MEP").length}</span></div>
+            </div>
+          </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <div style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 10 }}>Theo trạng thái</div><div style={{ display: "flex", alignItems: "center", gap: 14 }}><Donut data={sData} /><div style={{ flex: 1 }}>{sData.filter(d => d.v > 0).map((d, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 7, height: 7, borderRadius: 2, background: d.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{d.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'" }}>{d.v}</span></div>)}</div></div></div>
-          <div style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 10 }}>Theo rủi ro</div><div style={{ display: "flex", alignItems: "center", gap: 14 }}><Donut data={rData} /><div style={{ flex: 1 }}>{rData.filter(d => d.v > 0).map((d, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 7, height: 7, borderRadius: 2, background: d.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{d.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'" }}>{d.v}</span></div>)}</div></div></div>
+
+        {/* ROW 2: SD Status + Documents Overview + RFI Status */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr", gap: 10 }}>
+          {/* SD Status Donut */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📐 SD Trạng thái</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <Donut data={ST.map(s => ({ l: s.l, v: sdItems.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
+              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = sdItems.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
+            </div>
+          </div>
+          {/* Documents Overview - Stacked Bar */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📋 Tổng hợp tài liệu</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#2563EB" }} /> Đã duyệt</span>
+              <span style={{ fontSize: 10, display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#F59E0B" }} /> Đang xử lý</span>
+              <span style={{ fontSize: 10, display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#DC2626" }} /> Trễ hạn</span>
+            </div>
+            {(() => {
+              const cats = [
+                { l: "SDs", approved: sdApproved, pending: sdPending, overdue: sdOverdue },
+                { l: "RFIs", approved: rfiClosed, pending: rfiOpen, overdue: rfiOverdue },
+              ];
+              const mx = Math.max(...cats.map(c => c.approved + c.pending + c.overdue), 1);
+              return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {cats.map((c, i) => {
+                  const tot = c.approved + c.pending + c.overdue;
+                  return <div key={i}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#94A3B8", marginBottom: 4 }}>{c.l} ({tot})</div>
+                    <div style={{ display: "flex", height: 24, borderRadius: 4, overflow: "hidden", background: "#0F172A" }}>
+                      {c.approved > 0 && <div style={{ width: `${c.approved / mx * 100}%`, background: "#2563EB", minWidth: 2 }} title={`Đã duyệt: ${c.approved}`} />}
+                      {c.pending > 0 && <div style={{ width: `${c.pending / mx * 100}%`, background: "#F59E0B", minWidth: 2 }} title={`Đang xử lý: ${c.pending}`} />}
+                      {c.overdue > 0 && <div style={{ width: `${c.overdue / mx * 100}%`, background: "#DC2626", minWidth: 2 }} title={`Trễ hạn: ${c.overdue}`} />}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 3 }}>
+                      <span style={{ fontSize: 9, color: "#64748B" }}>✅{c.approved}</span>
+                      <span style={{ fontSize: 9, color: "#64748B" }}>⏳{c.pending}</span>
+                      <span style={{ fontSize: 9, color: "#64748B" }}>🔴{c.overdue}</span>
+                    </div>
+                  </div>;
+                })}
+              </div>;
+            })()}
+          </div>
+          {/* RFI Status Donut */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📝 RFI Trạng thái</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <Donut data={ST.map(s => ({ l: s.l, v: rfiItems.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
+              <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = rfiItems.filter(it => it.status === s.k).length; return v > 0 ? <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div> : null; })}</div>
+            </div>
+          </div>
         </div>
-        <div style={{ background: "#1E293B", borderRadius: 10, padding: "12px 14px" }}><div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>Tiến độ</div><Seg data={sData} h={24} /><div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>{sData.filter(d => d.v > 0).map((d, i) => <span key={i} style={{ fontSize: 10, color: "#94A3B8", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: d.c }} />{d.l}({d.v})</span>)}</div></div>
+
+        {/* ROW 3: Progress bar + Block/HM/Người vẽ */}
+        <div style={{ background: "#1E293B", borderRadius: 10, padding: "12px 14px" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>📈 Tiến độ chung</div>
+          <Seg data={sData} h={24} />
+          <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>{sData.filter(d => d.v > 0).map((d, i) => <span key={i} style={{ fontSize: 10, color: "#94A3B8", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: d.c }} />{d.l}({d.v})</span>)}</div>
+        </div>
+
+        {/* ROW 4: Aging + Avg Review + Block/HM/Người vẽ */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          {/* Aging of Open Items */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>⏰ Tuổi items trễ</div>
+            {(() => {
+              const labels = ["0–3 ngày", "4–7 ngày", "8–14 ngày", ">14 ngày"];
+              const colors = ["#3B82F6", "#F59E0B", "#EA580C", "#DC2626"];
+              const mx = Math.max(...aging, 1);
+              return <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-around", height: 120, gap: 6, paddingTop: 10 }}>
+                {aging.map((v, i) => <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: colors[i], fontFamily: "'JetBrains Mono'" }}>{v}</span>
+                  <div style={{ width: "100%", maxWidth: 36, height: `${Math.max(v / mx * 80, 4)}px`, background: colors[i], borderRadius: 4 }} />
+                  <span style={{ fontSize: 8, color: "#64748B", textAlign: "center", lineHeight: 1.2 }}>{labels[i]}</span>
+                </div>)}
+              </div>;
+            })()}
+          </div>
+          {/* Avg Review Time */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>⏱️ Thời gian xử lý TB (ngày)</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+              {[{ l: "Tất cả", v: avgReview.all, c: "#3B82F6" }, { l: "CIV", v: avgReview.civ, c: "#F59E0B" }, { l: "MEP", v: avgReview.mep, c: "#06B6D4" }].map((r, i) => (
+                <div key={i}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, color: "#94A3B8" }}>{r.l}</span>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: r.c, fontFamily: "'JetBrains Mono'" }}>{r.v}</span>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 4, background: "#0F172A", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(r.v / 15 * 100, 100)}%`, background: r.c, borderRadius: 4 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Theo Rủi ro */}
+          <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>🎯 Theo rủi ro</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <Donut data={rData} size={110} />
+              <div style={{ flex: 1 }}>{rData.filter(d => d.v > 0).map((d, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: d.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{d.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{d.v}</span></div>)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* ROW 5: Block + HM + Người vẽ */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           {[["Block", Object.entries(stats.bB), "#3B82F6"], ["Hạng mục", Object.entries(stats.bC), "#8B5CF6"], ["Người vẽ", Object.entries(stats.bP).sort((a, b) => b[1] - a[1]).slice(0, 8), "#0EA5E9"]].map(([t, d, c], i) =>
-            <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>{t}</div>{d.length ? <Bar data={d.map(([k, v]) => ({ l: k, v, c }))} /> : <div style={{ color: "#475569", fontSize: 12, padding: 16, textAlign: "center" }}>Trống</div>}</div>)}
+            <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 10, borderBottom: "2px solid #334155", paddingBottom: 6 }}>{t}</div>{d.length ? <Bar data={d.map(([k, v]) => ({ l: k, v, c }))} /> : <div style={{ color: "#475569", fontSize: 12, padding: 16, textAlign: "center" }}>Trống</div>}</div>)}
         </div>
+
+        {/* ROW 6: Cảnh báo */}
         <div style={{ background: "#1E293B", borderRadius: 10, padding: 14, borderLeft: "3px solid #EF4444" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#EF4444", marginBottom: 8 }}>⚠️ Cảnh báo ({alerts.length})</div>
           {!alerts.length ? <div style={{ fontSize: 12, color: "#64748B" }}>Không có item trễ 🎉</div> :
