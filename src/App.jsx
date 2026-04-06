@@ -428,6 +428,22 @@ export default function App() {
 
   const alerts = useMemo(() => dashItems.filter(i => ["late", "high"].includes(rsk(i))).sort((a, b) => (rsk(a) === "late" ? 0 : 1) - (rsk(b) === "late" ? 0 : 1) || (a.planDate || "").localeCompare(b.planDate || "")), [dashItems]);
 
+  // Dashboard useMemo hooks (MUST be before early returns)
+  const sdItemsDash = useMemo(() => dashItems.filter(i => i.type === "SD"), [dashItems]);
+  const rfiItemsDash = useMemo(() => dashItems.filter(i => i.type === "RFI"), [dashItems]);
+  const openItems = useMemo(() => dashItems.filter(i => !["DA_DUYET", "DUYET_GC"].includes(i.status) && i.planDate), [dashItems]);
+  const aging = useMemo(() => {
+    const buckets = [0, 0, 0, 0];
+    openItems.forEach(it => { const d = dd(td(), it.planDate); if (d === null || d <= 0) return; if (d <= 3) buckets[0]++; else if (d <= 7) buckets[1]++; else if (d <= 14) buckets[2]++; else buckets[3]++; });
+    return buckets;
+  }, [openItems]);
+  const avgReview = useMemo(() => {
+    const completed = dashItems.filter(i => i.actualDate && i.planDate);
+    if (!completed.length) return { all: 0, civ: 0, mep: 0 };
+    const calc = (list) => { if (!list.length) return 0; const sum = list.reduce((s, i) => s + Math.abs(dd(i.actualDate, i.planDate) || 0), 0); return Math.round(sum / list.length * 10) / 10; };
+    return { all: calc(completed), civ: calc(completed.filter(i => i.dept === "CIV")), mep: calc(completed.filter(i => i.dept === "MEP")) };
+  }, [dashItems]);
+
   const det = detId ? items.find(x => x.id === detId) : null;
   const eIt = editId === "ns" ? { id: Date.now().toString(36), type: "SD", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "DANG_VE", planDate: "", actualDate: "", offset: 7, rev: 0, links: [], notes: [] } : editId === "nr" ? { id: Date.now().toString(36), type: "RFI", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "DANG_VE", planDate: "", actualDate: "", offset: 3, rev: 0, links: [], notes: [] } : items.find(x => x.id === editId);
 
@@ -447,36 +463,21 @@ export default function App() {
   const sData = ST.map(s => ({ l: s.l, v: stats.bS[s.k] || 0, c: s.c }));
   const rData = Object.entries(RC).filter(([k]) => k !== "none").map(([k, v]) => ({ l: v.l, v: stats.bR[k] || 0, c: v.c }));
 
-  // Dashboard computed - theo layout hình ảnh
-  const sdItems = useMemo(() => dashItems.filter(i => i.type === "SD"), [dashItems]);
-  const rfiItems = useMemo(() => dashItems.filter(i => i.type === "RFI"), [dashItems]);
-  const sdApproved = sdItems.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
-  const sdPending = sdItems.filter(i => ["CHO_REVIEW", "CHO_DUYET", "DANG_VE"].includes(i.status)).length;
-  const sdOverdue = sdItems.filter(i => rsk(i) === "late").length;
-  const rfiClosed = rfiItems.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
-  const rfiOpen = rfiItems.filter(i => !["DA_DUYET", "DUYET_GC", "REJECT"].includes(i.status)).length;
-  const rfiOverdue = rfiItems.filter(i => rsk(i) === "late").length;
+  // Dashboard derived (non-hook, safe after early return)
+  const sdApproved = sdItemsDash.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
+  const sdPending = sdItemsDash.filter(i => ["CHO_REVIEW", "CHO_DUYET", "DANG_VE"].includes(i.status)).length;
+  const sdOverdue = sdItemsDash.filter(i => rsk(i) === "late").length;
+  const rfiClosed = rfiItemsDash.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
+  const rfiOpen = rfiItemsDash.filter(i => !["DA_DUYET", "DUYET_GC", "REJECT"].includes(i.status)).length;
+  const rfiOverdue = rfiItemsDash.filter(i => rsk(i) === "late").length;
   const totalOverdue = stats.bR.late;
-  const sdPct = sdItems.length ? Math.round(sdApproved / sdItems.length * 100) : 0;
-  const sdPendPct = sdItems.length ? Math.round(sdPending / sdItems.length * 100) : 0;
-  const sdOverduePct = sdItems.length ? Math.round(sdOverdue / sdItems.length * 100) : 0;
-  const rfiClosedPct = rfiItems.length ? Math.round(rfiClosed / rfiItems.length * 100) : 0;
-  const rfiOpenPct = rfiItems.length ? Math.round(rfiOpen / rfiItems.length * 100) : 0;
-  const rfiOverduePct = rfiItems.length ? Math.round(rfiOverdue / rfiItems.length * 100) : 0;
-  // Aging of open items
-  const openItems = useMemo(() => dashItems.filter(i => !["DA_DUYET", "DUYET_GC"].includes(i.status) && i.planDate), [dashItems]);
-  const aging = useMemo(() => {
-    const buckets = [0, 0, 0, 0]; // 0-3, 4-7, 8-14, >14
-    openItems.forEach(it => { const d = dd(td(), it.planDate); if (d === null || d <= 0) return; if (d <= 3) buckets[0]++; else if (d <= 7) buckets[1]++; else if (d <= 14) buckets[2]++; else buckets[3]++; });
-    return buckets;
-  }, [openItems]);
-  // Avg review time
-  const avgReview = useMemo(() => {
-    const completed = dashItems.filter(i => i.actualDate && i.planDate);
-    if (!completed.length) return { all: 0, civ: 0, mep: 0 };
-    const calc = (list) => { if (!list.length) return 0; const sum = list.reduce((s, i) => s + Math.abs(dd(i.actualDate, i.planDate) || 0), 0); return Math.round(sum / list.length * 10) / 10; };
-    return { all: calc(completed), civ: calc(completed.filter(i => i.dept === "CIV")), mep: calc(completed.filter(i => i.dept === "MEP")) };
-  }, [dashItems]);
+  const sdPct2 = sdItemsDash.length ? Math.round(sdApproved / sdItemsDash.length * 100) : 0;
+  const sdPendPct = sdItemsDash.length ? Math.round(sdPending / sdItemsDash.length * 100) : 0;
+  const sdOverduePct = sdItemsDash.length ? Math.round(sdOverdue / sdItemsDash.length * 100) : 0;
+  const rfiClosedPct = rfiItemsDash.length ? Math.round(rfiClosed / rfiItemsDash.length * 100) : 0;
+  const rfiOpenPct = rfiItemsDash.length ? Math.round(rfiOpen / rfiItemsDash.length * 100) : 0;
+  const rfiOverduePct = rfiItemsDash.length ? Math.round(rfiOverdue / rfiItemsDash.length * 100) : 0;
+
   const ss = { padding: "5px 9px", borderRadius: 7, border: "1px solid #334155", background: "#1E293B", color: "#F1F5F9", fontSize: 12 };
   const hasDashFilter = dashFl.bl !== "ALL" || dashFl.fl !== "ALL" || dashFl.ct !== "ALL" || dashFl.dp !== "ALL";
 
@@ -533,9 +534,9 @@ export default function App() {
           {/* SD Card */}
           <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #2563EB" }}>
             <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📐 Shop Drawings (SDs)</div>
-            <div style={{ fontSize: 32, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{sdItems.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{sdItemsDash.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{sdPct}% Đã duyệt</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{sdPct2}% Đã duyệt</span></div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{sdPendPct}% Đang xử lý</span></div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#DC2626" }}>🔴</span><span style={{ color: "#CBD5E1" }}>{sdOverduePct}% Trễ hạn</span></div>
             </div>
@@ -543,7 +544,7 @@ export default function App() {
           {/* RFI Card */}
           <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #7C3AED" }}>
             <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📝 RFIs</div>
-            <div style={{ fontSize: 32, fontWeight: 800, color: "#8B5CF6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{rfiItems.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: "#8B5CF6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{rfiItemsDash.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{rfiClosedPct}% Đã đóng</span></div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{rfiOpenPct}% Đang mở</span></div>
