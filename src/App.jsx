@@ -2,6 +2,13 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { db, auth, storage, googleProvider, ref, onValue, set, remove, update, signInWithPopup, signOut, onAuthStateChanged, storageRef, uploadBytes, getDownloadURL } from "./firebase";
 
 // ─── Constants ───
+// 👇 DANH SÁCH EMAIL ĐƯỢC PHÉP XÓA. Thêm/bớt email tại đây.
+// Chỉ những email này mới thấy nút xóa. Còn lại chỉ xem + sửa.
+const ADMIN_EMAILS = [
+  "thanh825tan@gmail.com",
+];
+const canDeleteUser = (u) => !!u && ADMIN_EMAILS.map(e => e.toLowerCase()).includes((u.email || "").toLowerCase());
+
 const ST = [
   { k: "DANG_VE", l: "Đang vẽ", c: "#6366F1", bg: "#EEF2FF" },
   { k: "CHO_REVIEW", l: "Chờ review", c: "#D97706", bg: "#FEF3C7" },
@@ -348,7 +355,9 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [sortCol, setSortCol] = useState(null); const [sortDir, setSortDir] = useState("asc");
   const [selected, setSelected] = useState(new Set());
+  const [lastSelId, setLastSelId] = useState(null);
   const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+  const canDel = canDeleteUser(user);
 
   useEffect(() => { const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }); return () => unsub(); }, []);
   useEffect(() => { if (!user) return; const itemsRef = ref(db, ITEMS_REF); const unsub = onValue(itemsRef, (snapshot) => { const data = snapshot.val(); if (data) { setItems(Object.values(data)); } else { const s = samples(); writeAllItems(s); setItems(s); } setOk(true); }); return () => unsub(); }, [user]);
@@ -408,9 +417,42 @@ export default function App() {
   }, [flt, sortCol, sortDir]);
 
   // Selection handlers
-  const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleSelect = (id, shiftKey = false) => {
+    if (shiftKey && lastSelId && lastSelId !== id) {
+      // Shift+click: chọn range từ lastSelId tới id trong sorted hiện tại
+      const ids = sorted.map(i => i.id);
+      const a = ids.indexOf(lastSelId);
+      const b = ids.indexOf(id);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        const range = ids.slice(lo, hi + 1);
+        setSelected(prev => {
+          const n = new Set(prev);
+          range.forEach(rid => n.add(rid));
+          return n;
+        });
+        setLastSelId(id);
+        return;
+      }
+    }
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+    setLastSelId(id);
+  };
   const toggleSelectAll = () => { const ids = sorted.map(i => i.id); if (ids.every(id => selected.has(id))) { setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n; }); } else { setSelected(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n; }); } };
-  const deleteSelected = () => { if (!selected.size) return; if (!window.confirm(`Xóa ${selected.size} mục đã chọn?`)) return; selected.forEach(id => dl(id)); setSelected(new Set()); showToast(`Đã xóa ${selected.size} mục`); };
+  const deleteSelected = () => { if (!canDel) { showToast("Bạn không có quyền xóa", "error"); return; } if (!selected.size) return; if (!window.confirm(`Xóa ${selected.size} mục đã chọn?`)) return; selected.forEach(id => dl(id)); setSelected(new Set()); setLastSelId(null); showToast(`Đã xóa ${selected.size} mục`); };
+  // Bulk đổi trạng thái: nếu row đang đổi nằm trong selected và có nhiều hơn 1 mục được chọn → áp cho cả selected
+  const handleStatusChange = (rowId, newStatus) => {
+    if (selected.has(rowId) && selected.size > 1) {
+      selected.forEach(id => updateItem(id, { status: newStatus }));
+      showToast(`Đã đổi trạng thái ${selected.size} mục`);
+    } else {
+      updateItem(rowId, { status: newStatus });
+    }
+  };
 
   const stats = useMemo(() => {
     const src = dashItems; const bS = {}, bR = { late: 0, high: 0, med: 0, ok: 0, done: 0, reject: 0, none: 0 }, bB = {}, bC = {}, bP = {}, bD = {};
@@ -505,7 +547,7 @@ export default function App() {
       {/* Detail overlay */}
       {det && <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,.6)", zIndex: 1000, display: "flex", justifyContent: "flex-end" }} onClick={() => setDetId(null)}>
         <div style={{ width: 420, maxWidth: "90vw", height: "100vh", background: "#1E293B", padding: "18px 20px", overflowY: "auto", boxShadow: "-4px 0 24px rgba(0,0,0,.4)" }} onClick={e => e.stopPropagation()}>
-          <Detail item={det} items={items} onClose={() => setDetId(null)} onEdit={() => { setEditId(det.id); setView("form"); setDetId(null); }}
+          <Detail item={det} items={items} canDel={canDel} onClose={() => setDetId(null)} onEdit={() => { setEditId(det.id); setView("form"); setDetId(null); }}
             onLink={tid => { updateItem(det.id, { links: [...new Set([...(det.links || []), tid])] }); const t = items.find(x => x.id === tid); updateItem(tid, { links: [...new Set([...(t?.links || []), det.id])] }); }}
             onUnlink={tid => { updateItem(det.id, { links: (det.links || []).filter(i => i !== tid) }); updateItem(tid, { links: ((items.find(x => x.id === tid)?.links) || []).filter(i => i !== det.id) }); }}
             onNote={(t, file) => { const n = { id: Date.now().toString(36), t, d: td(), h: new Date().toLocaleTimeString("vi", { hour: "2-digit", minute: "2-digit" }) }; if (file) n.file = file; updateItem(det.id, { notes: [...(det.notes || []), n] }); }}
@@ -715,7 +757,8 @@ export default function App() {
         </div>
         <div style={{ fontSize: 11, color: "#64748B", display: "flex", alignItems: "center", gap: 8 }}>
           {sorted.length} kết quả
-          {selected.size > 0 && <button onClick={deleteSelected} style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #7F1D1D", background: "#FEE2E2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🗑 Xóa {selected.size} mục</button>}
+          {selected.size > 0 && canDel && <button onClick={deleteSelected} style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #7F1D1D", background: "#FEE2E2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🗑 Xóa {selected.size} mục</button>}
+          {selected.size > 0 && <span style={{ fontSize: 10, color: "#3B82F6" }}>✓ Đã chọn {selected.size}</span>}
           {sortCol && <span style={{ color: "#3B82F6", fontSize: 10 }}>Sắp xếp: {Object.entries(SORT_KEYS).find(([,v]) => v === sortCol)?.[0]} {sortDir === "asc" ? "↑" : "↓"} <button onClick={() => { setSortCol(null); setSortDir("asc"); }} style={{ background: "none", border: "none", color: "#F87171", cursor: "pointer", fontSize: 10 }}>✕</button></span>}
         </div>
         <div style={{ overflowX: "auto", borderRadius: 8, border: "1px solid #1E293B" }}>
@@ -730,7 +773,7 @@ export default function App() {
             <tbody>{!sorted.length ? <tr><td colSpan={17} style={{ padding: 30, textAlign: "center", color: "#475569" }}>Không có dữ liệu</td></tr> :
               sorted.map(it => { const r = rsk(it), rc = RC[r], st = ST.find(s => s.k === it.status), l = ld(it), lk = (it.links || []).map(lid => items.find(x => x.id === lid)).filter(Boolean); const dpt = DEPTS.find(d => d.k === it.dept);
                 return <tr key={it.id} style={{ cursor: "pointer", borderBottom: "1px solid #1E293B", background: selected.has(it.id) ? "#1E3A5F" : "transparent" }} onMouseEnter={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "#1E293B"; }} onMouseLeave={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "transparent"; }}>
-                  <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} style={{ cursor: "pointer" }} /></td>
+                  <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => {}} onClick={e => { e.stopPropagation(); toggleSelect(it.id, e.shiftKey); }} style={{ cursor: "pointer" }} /></td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{rc.i}</td>
                   <td style={{ padding: "6px 4px", fontWeight: 700, fontFamily: "'JetBrains Mono'", fontSize: 10, whiteSpace: "nowrap" }} onClick={() => setDetId(it.id)}>{it.code || "—"}</td>
                   <td style={{ padding: "6px 4px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => setDetId(it.id)}>{it.name || "—"}</td>
@@ -741,7 +784,7 @@ export default function App() {
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.who || "—"}</td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.sub || "—"}</td>
                   <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}>
-                    <select value={it.status} onChange={e => { updateItem(it.id, { status: e.target.value }); }} style={{ padding: "2px 4px", borderRadius: 8, border: "none", background: st?.bg || "#F3F4F6", color: st?.c || "#6B7280", fontSize: 10, fontWeight: 600, cursor: "pointer", outline: "none", appearance: "auto" }}>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
+                    <select value={it.status} onChange={e => { handleStatusChange(it.id, e.target.value); }} style={{ padding: "2px 4px", borderRadius: 8, border: "none", background: st?.bg || "#F3F4F6", color: st?.c || "#6B7280", fontSize: 10, fontWeight: 600, cursor: "pointer", outline: "none", appearance: "auto" }}>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
                   </td>
                   <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.planDate)}</td>
                   <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.actualDate)}</td>
@@ -760,7 +803,7 @@ export default function App() {
 }
 
 // ─── Detail Panel ───
-function Detail({ item, items, onClose, onEdit, onLink, onUnlink, onNote, onDelNote, onDel, onGo }) {
+function Detail({ item, items, canDel, onClose, onEdit, onLink, onUnlink, onNote, onDelNote, onDel, onGo }) {
   const [nt, setNt] = useState(""); const [ls, setLs] = useState(""); const [slp, setSlp] = useState(false);
   const [uploading, setUploading] = useState(false); const fileRef = useRef(null);
   const st = ST.find(s => s.k === item.status), r = rsk(item), rc = RC[r], l = ld(item);
@@ -842,7 +885,7 @@ function Detail({ item, items, onClose, onEdit, onLink, onUnlink, onNote, onDelN
     </div>
     <div style={{ display: "flex", gap: 6 }}>
       <button onClick={onEdit} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#3B82F6", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✏️ Sửa</button>
-      <button onClick={() => { if (window.confirm("Xóa?")) onDel(); }} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #7F1D1D", background: "transparent", color: "#EF4444", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
+      {canDel && <button onClick={() => { if (window.confirm("Xóa?")) onDel(); }} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #7F1D1D", background: "transparent", color: "#EF4444", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>}
     </div>
   </>);
 }
