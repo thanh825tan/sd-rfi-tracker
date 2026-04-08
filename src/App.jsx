@@ -19,6 +19,20 @@ const ST = [
   { k: "DUYET_GC", l: "Duyệt có GC", c: "#0891B2", bg: "#CFFAFE" },
   { k: "TAI_NOP", l: "Tái nộp", c: "#EA580C", bg: "#FFEDD5" },
 ];
+// RFI chỉ có 2 trạng thái
+const ST_RFI = [
+  { k: "OPEN", l: "Đang mở", c: "#D97706", bg: "#FEF3C7" },
+  { k: "CLOSED", l: "Đã đóng", c: "#059669", bg: "#D1FAE5" },
+];
+// Helper: lấy danh sách trạng thái theo loại
+const getStatusList = (type) => type === "RFI" ? ST_RFI : ST;
+const getStatusItem = (type, k) => getStatusList(type).find(s => s.k === k);
+// Migration: chuẩn hóa trạng thái RFI cũ về OPEN/CLOSED
+const normRfiStatus = (s) => {
+  if (s === "OPEN" || s === "CLOSED") return s;
+  if (["DA_DUYET", "DUYET_GC"].includes(s)) return "CLOSED";
+  return "OPEN";
+};
 const RC = {
   late: { l: "Trễ hạn", c: "#DC2626", bg: "#FEE2E2", i: "🔴" },
   high: { l: "Nguy cơ cao", c: "#EA580C", bg: "#FFEDD5", i: "🟠" },
@@ -48,6 +62,9 @@ const STATUS_MAP = {
   "reject": "REJECT",
   "duyệt có gc": "DUYET_GC", "duyet co gc": "DUYET_GC", "duyet gc": "DUYET_GC",
   "tái nộp": "TAI_NOP", "tai nop": "TAI_NOP",
+  // RFI status
+  "đang mở": "OPEN", "dang mo": "OPEN", "open": "OPEN", "mở": "OPEN", "mo": "OPEN",
+  "đã đóng": "CLOSED", "da dong": "CLOSED", "closed": "CLOSED", "đóng": "CLOSED", "dong": "CLOSED",
 };
 
 const DEPT_MAP = {
@@ -61,19 +78,71 @@ const ad = (d, n) => { if (!d) return ""; const x = new Date(d); x.setDate(x.get
 const dd = (a, b) => { if (!a || !b) return null; return Math.round((new Date(a) - new Date(b)) / 864e5); };
 const fm = d => { if (!d) return "—"; const p = d.split("-"); return `${p[2]}/${p[1]}`; };
 
+// Đã hoàn thành = SD đã duyệt (có approveDate hoặc status DA_DUYET/DUYET_GC) hoặc RFI đã đóng
+const isDone = (it) => {
+  if (it.type === "RFI") return normRfiStatus(it.status) === "CLOSED";
+  return ["DA_DUYET", "DUYET_GC"].includes(it.status) || !!it.approveDate;
+};
+// KH duyệt/đóng = ngày actualDate (TT nộp) + offset
+const apprPlan = (it) => it.actualDate ? ad(it.actualDate, it.offset || 0) : "";
+
 function rsk(it) {
-  if (["DA_DUYET", "DUYET_GC"].includes(it.status)) return "done";
+  if (it.type === "RFI") {
+    if (normRfiStatus(it.status) === "CLOSED") {
+      // Đã đóng: nếu approveDate > apprPlan → late, ngược lại done
+      const ap = apprPlan(it);
+      if (it.approveDate && ap && dd(it.approveDate, ap) > 0) return "late";
+      return "done";
+    }
+    // Đang mở: chưa nộp / đã nộp / quá hạn
+    if (!it.actualDate) return "none";
+    const ap = apprPlan(it);
+    if (!ap) return "ok";
+    const d = dd(ap, td());
+    if (d < 0) return "late"; if (d <= 3) return "high"; if (d <= 7) return "med"; return "ok";
+  }
+  // SD
   if (it.status === "REJECT") return "reject";
+  if (isDone(it)) {
+    const ap = apprPlan(it);
+    if (it.approveDate && ap && dd(it.approveDate, ap) > 0) return "late";
+    return "done";
+  }
+  if (!it.planDate && !it.actualDate) return "none";
+  // Chưa duyệt: ưu tiên dựa vào KH duyệt nếu đã có actualDate
+  const ap = apprPlan(it);
+  if (ap) {
+    const d = dd(ap, td());
+    if (d < 0) return "late"; if (d <= 3) return "high"; if (d <= 7) return "med"; return "ok";
+  }
+  // Chưa nộp → fallback theo planDate
   if (!it.planDate) return "none";
-  if (it.actualDate) return dd(it.actualDate, it.planDate) > 0 ? "late" : "ok";
   const d = dd(it.planDate, td());
   if (d < 0) return "late"; if (d <= 3) return "high"; if (d <= 7) return "med"; return "ok";
 }
+
+// Số ngày TRỄ TRÌNH = TT nộp − KH nộp (nếu > 0). RFI không có planDate nên không tính.
+function subDelay(it) {
+  if (it.type === "RFI") return null;
+  if (!it.actualDate || !it.planDate) return null;
+  const d = dd(it.actualDate, it.planDate);
+  return d > 0 ? d : 0;
+}
+
+// Số ngày DELAY DUYỆT/ĐÓNG:
+//  - Đã hoàn thành: TT duyệt − KH duyệt (nếu > 0)
+//  - Chưa hoàn thành (đã có TT nộp): today − KH duyệt (nếu > 0)
+//  - Chưa nộp: null (không tính được)
 function ld(it) {
-  if (["DA_DUYET", "DUYET_GC"].includes(it.status)) return null;
-  if (it.actualDate && it.planDate) { const d = dd(it.actualDate, it.planDate); return d > 0 ? d : 0; }
-  if (!it.actualDate && it.planDate) { const d = dd(td(), it.planDate); return d > 0 ? d : 0; }
-  return null;
+  const ap = apprPlan(it);
+  if (!ap) return null;
+  if (isDone(it)) {
+    if (!it.approveDate) return null;
+    const d = dd(it.approveDate, ap);
+    return d > 0 ? d : 0;
+  }
+  const d = dd(td(), ap);
+  return d > 0 ? d : 0;
 }
 
 // File type icon
@@ -166,7 +235,14 @@ function mapRowToItem(row, index) {
   const rawType = (r.type || r.loai || r.loại || "").toUpperCase().trim();
   const type = rawType === "RFI" ? "RFI" : rawType === "SD" ? "SD" : code.toUpperCase().startsWith("RFI") ? "RFI" : "SD";
   const rawStatus = (r.status || r.trangthai || r.trạngthái || r.tt || "").toLowerCase().trim();
-  const status = STATUS_MAP[rawStatus] || ST.find(s => s.k === rawStatus.toUpperCase())?.k || "DANG_VE";
+  // Status default tùy theo loại
+  const defaultStatus = type === "RFI" ? "OPEN" : "DANG_VE";
+  let status = STATUS_MAP[rawStatus] || getStatusList(type).find(s => s.k === rawStatus.toUpperCase())?.k || defaultStatus;
+  // Đảm bảo status hợp lệ với loại (RFI cũ → migrate)
+  const validKeys = getStatusList(type).map(s => s.k);
+  if (!validKeys.includes(status)) {
+    status = type === "RFI" ? normRfiStatus(status) : defaultStatus;
+  }
   const rawDept = (r.dept || r.bophan || r.bộphận || r.bp || "").toLowerCase().trim();
   const dept = DEPT_MAP[rawDept] || (rawDept === "mep" ? "MEP" : rawDept === "civ" ? "CIV" : "CIV");
   function parseDate(val) {
@@ -189,18 +265,20 @@ function mapRowToItem(row, index) {
     status,
     planDate: parseDate(r.plandate || r.khnộp || r.khnop || r.ngàykh || r.ngaykh || ""),
     actualDate: parseDate(r.actualdate || r.ttnop || r.ttnộp || r.thựctế || r.ngàynộp || r.ngaynop || ""),
-    offset: parseInt(r.offset || "7") || 7, rev: parseInt(r.rev || "0") || 0, links: [], notes: [],
+    approveDate: parseDate(r.approvedate || r.ttduyet || r.ttduyệt || r.ttđóng || r.ttdong || r.ngàyduyệt || r.ngayduyet || r.ngàyđóng || r.ngaydong || ""),
+    offset: parseInt(r.offset || (type === "RFI" ? "3" : "7")) || (type === "RFI" ? 3 : 7),
+    rev: parseInt(r.rev || "0") || 0, links: [], notes: [],
   };
 }
 
 // ─── Export helpers ───
 function itemsToCSV(items, filterType) {
-  const headers = ["Loại", "Mã", "Tên", "Block", "Tầng", "Bộ phận", "Hạng mục", "Người vẽ", "Đệ trình", "Trạng thái", "Rủi ro", "KH nộp", "TT nộp", "Offset", "KH duyệt", "Trễ (ngày)", "Rev", "Ghi chú"];
+  const headers = ["Loại", "Mã", "Tên", "Block", "Tầng", "Bộ phận", "Hạng mục", "Người vẽ", "Đệ trình", "Trạng thái", "Rủi ro", "KH nộp", "TT nộp", "Trễ trình", "Offset", "KH duyệt/đóng", "TT duyệt/đóng", "Delay", "Rev", "Ghi chú"];
   const src = filterType ? items.filter(i => i.type === filterType) : items;
   const rows = src.map(it => {
-    const st = ST.find(s => s.k === it.status); const r = rsk(it); const rc = RC[r]; const l = ld(it);
+    const st = getStatusItem(it.type, it.status); const r = rsk(it); const rc = RC[r]; const l = ld(it); const sd = subDelay(it);
     const notesText = (it.notes || []).map(n => `[${n.d} ${n.h}] ${n.t}${n.file ? ` [File: ${n.file.name}]` : ""}`).join(" | ");
-    return [it.type, it.code, it.name, it.block, it.floor, it.dept || "", it.cat, it.who, it.sub, st?.l || it.status, rc?.l || r, it.planDate || "", it.actualDate || "", it.offset, ad(it.planDate, it.offset) || "", l != null ? l : "", it.rev, notesText];
+    return [it.type, it.code, it.name, it.block, it.floor, it.dept || "", it.cat, it.who, it.sub, st?.l || it.status, rc?.l || r, it.planDate || "", it.actualDate || "", sd != null ? sd : "", it.offset, apprPlan(it) || "", it.approveDate || "", l != null ? l : "", it.rev, notesText];
   });
   const escape = v => { const s = String(v ?? ""); if (s.includes(",") || s.includes('"') || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`; return s; };
   return [headers.map(escape).join(","), ...rows.map(r => r.map(escape).join(","))].join("\n");
@@ -208,21 +286,24 @@ function itemsToCSV(items, filterType) {
 
 function generateReportHTML(items, stats) {
   const today = td();
-  const done = (stats.bS.DA_DUYET || 0) + (stats.bS.DUYET_GC || 0);
+  const done = items.filter(i => isDone(i)).length;
   const pct = stats.tot ? Math.round(done / stats.tot * 100) : 0;
   const sdItems = items.filter(i => i.type === "SD"); const rfiItems = items.filter(i => i.type === "RFI");
   const lateItems = items.filter(i => rsk(i) === "late"); const highItems = items.filter(i => rsk(i) === "high");
   function makeTable(list) {
     if (!list.length) return "<p style='color:#64748B;padding:12px'>Không có dữ liệu</p>";
-    return `<table><thead><tr><th>Mã</th><th>Tên</th><th>Block</th><th>Tầng</th><th>BP</th><th>HM</th><th>Người vẽ</th><th>Trạng thái</th><th>KH nộp</th><th>TT nộp</th><th>Trễ</th></tr></thead>
+    return `<table><thead><tr><th>Mã</th><th>Tên</th><th>Block</th><th>Tầng</th><th>BP</th><th>HM</th><th>Người vẽ</th><th>Trạng thái</th><th>KH nộp</th><th>TT nộp</th><th>Trễ trình</th><th>KH duyệt</th><th>TT duyệt</th><th>Delay</th></tr></thead>
     <tbody>${list.map(it => {
-      const st = ST.find(s => s.k === it.status); const r = rsk(it); const l = ld(it);
+      const st = getStatusItem(it.type, it.status); const r = rsk(it); const l = ld(it); const sd = subDelay(it);
       const dpt = DEPTS.find(d => d.k === it.dept);
       return `<tr><td style="font-weight:700;font-family:monospace">${it.code}</td><td>${it.name||"—"}</td><td>${it.block}</td><td>${it.floor}</td>
       <td><span style="padding:2px 6px;border-radius:10px;font-size:10px;font-weight:700;background:${dpt?.bg||"#F3F4F6"};color:${dpt?.c||"#6B7280"}">${it.dept||"—"}</span></td>
       <td>${it.cat}</td><td>${it.who}</td>
       <td><span style="padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${st?.bg};color:${st?.c}">${st?.l}</span></td>
       <td style="font-family:monospace;font-size:12px">${fm(it.planDate)}</td><td style="font-family:monospace;font-size:12px">${fm(it.actualDate)}</td>
+      <td>${sd>0?`<span style="color:#EA580C;font-weight:700">+${sd}</span>`:sd===0?"0":"—"}</td>
+      <td style="font-family:monospace;font-size:12px">${fm(apprPlan(it))}</td>
+      <td style="font-family:monospace;font-size:12px">${fm(it.approveDate)}</td>
       <td>${l>0?`<span style="color:#DC2626;font-weight:700">+${l}</span>`:l===0?"0":"—"}</td></tr>`;
     }).join("")}</tbody></table>`;
   }
@@ -288,7 +369,7 @@ function ImportModal({ onImport, onClose }) {
           <div style={{ fontWeight: 700, color: "#F1F5F9", marginBottom: 4 }}>Hướng dẫn:</div>
           <div>1. Mở file Excel → Ctrl+A → Ctrl+C → Paste vào ô bên dưới</div>
           <div>2. Hoặc xuất file CSV/TSV từ Excel rồi chọn file</div>
-          <div style={{ marginTop: 6, fontWeight: 600, color: "#F59E0B" }}>Các cột: Code/Mã, Tên, Block, Tầng, Bộ phận/Dept (CIV/MEP), Hạng mục, Người vẽ, Đệ trình, Trạng thái, KH nộp, TT nộp, Offset, Rev</div>
+          <div style={{ marginTop: 6, fontWeight: 600, color: "#F59E0B" }}>Các cột: Code/Mã, Tên, Block, Tầng, Bộ phận/Dept (CIV/MEP), Hạng mục, Người vẽ, Đệ trình, Trạng thái, KH nộp, TT nộp, TT duyệt, Offset, Rev</div>
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}><button onClick={() => fileRef.current?.click()} style={{ padding: "8px 14px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#3B82F6", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📁 Chọn file CSV/TSV</button><input ref={fileRef} type="file" accept=".csv,.tsv,.txt" onChange={handleFile} style={{ display: "none" }} /></div>
         <textarea value={text} onChange={e => handleTextChange(e.target.value)} placeholder={"Paste dữ liệu từ Excel vào đây... (Ctrl+V)\n\nVí dụ:\nCode\tTên\tBlock\tTầng\tBộ phận\tHạng mục\tNgười vẽ\tTrạng thái\tKH nộp\nSD-KC-010\tMB sàn T8\tBlock A\tT8\tCIV\tKết cấu\tNguyễn Văn A\tĐang vẽ\t15/04/2026"} style={{ ...I, height: 120, resize: "vertical", fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }} />
@@ -297,9 +378,9 @@ function ImportModal({ onImport, onClose }) {
           <div style={{ marginTop: 12, fontSize: 12, fontWeight: 700, color: "#059669" }}>✅ Xem trước: {preview.length} dòng</div>
           <div style={{ overflowX: "auto", marginTop: 6, borderRadius: 8, border: "1px solid #334155", maxHeight: 260, overflowY: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead><tr style={{ background: "#0F172A" }}>{["Loại", "Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "TT", "KH nộp"].map((h, i) => <th key={i} style={{ padding: "6px 4px", textAlign: "left", fontWeight: 600, color: "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10 }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: "#0F172A" }}>{["Loại", "Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "TT", "KH nộp", "TT nộp", "TT duyệt"].map((h, i) => <th key={i} style={{ padding: "6px 4px", textAlign: "left", fontWeight: 600, color: "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10 }}>{h}</th>)}</tr></thead>
               <tbody>{preview.slice(0, 20).map((it, i) => {
-                const st = ST.find(s => s.k === it.status); const dpt = DEPTS.find(d => d.k === it.dept);
+                const st = getStatusItem(it.type, it.status); const dpt = DEPTS.find(d => d.k === it.dept);
                 return <tr key={i} style={{ borderBottom: "1px solid #1E293B" }}>
                   <td style={{ padding: "4px", fontSize: 10, fontWeight: 700, color: it.type === "RFI" ? "#8B5CF6" : "#3B82F6" }}>{it.type}</td>
                   <td style={{ padding: "4px", fontFamily: "'JetBrains Mono'", fontSize: 10 }}>{it.code}</td>
@@ -309,6 +390,8 @@ function ImportModal({ onImport, onClose }) {
                   <td style={{ padding: "4px" }}>{it.cat || "—"}</td><td style={{ padding: "4px" }}>{it.who || "—"}</td>
                   <td style={{ padding: "4px" }}><Bd c={st?.c} bg={st?.bg}>{st?.l}</Bd></td>
                   <td style={{ padding: "4px", fontFamily: "'JetBrains Mono'", fontSize: 10 }}>{fm(it.planDate)}</td>
+                  <td style={{ padding: "4px", fontFamily: "'JetBrains Mono'", fontSize: 10 }}>{fm(it.actualDate)}</td>
+                  <td style={{ padding: "4px", fontFamily: "'JetBrains Mono'", fontSize: 10 }}>{fm(it.approveDate)}</td>
                 </tr>; })}</tbody>
             </table>{preview.length > 20 && <div style={{ padding: 6, textAlign: "center", color: "#64748B", fontSize: 11 }}>... và {preview.length - 20} dòng nữa</div>}
           </div></>}
@@ -360,14 +443,74 @@ export default function App() {
   const canDel = canDeleteUser(user);
 
   useEffect(() => { const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }); return () => unsub(); }, []);
-  useEffect(() => { if (!user) return; const itemsRef = ref(db, ITEMS_REF); const unsub = onValue(itemsRef, (snapshot) => { const data = snapshot.val(); if (data) { setItems(Object.values(data)); } else { const s = samples(); writeAllItems(s); setItems(s); } setOk(true); }); return () => unsub(); }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    const itemsRef = ref(db, ITEMS_REF);
+    const unsub = onValue(itemsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        // Migration: chuẩn hóa status RFI và bù approveDate cho SD đã duyệt
+        const arr = Object.values(data).map(it => {
+          const x = { ...it };
+          if (x.type === "RFI") {
+            x.status = normRfiStatus(x.status);
+          } else {
+            // SD: nếu status đã duyệt nhưng chưa có approveDate → suy ra
+            if (["DA_DUYET", "DUYET_GC"].includes(x.status) && !x.approveDate) {
+              x.approveDate = x.actualDate || x.planDate || "";
+            }
+          }
+          return x;
+        });
+        setItems(arr);
+      } else {
+        const s = samples(); writeAllItems(s); setItems(s);
+      }
+      setOk(true);
+    });
+    return () => unsub();
+  }, [user]);
 
   const handleLogin = async () => { try { await signInWithPopup(auth, googleProvider); } catch (err) { console.error("Login error:", err); } };
   const handleLogout = async () => { try { await signOut(auth); setItems([]); setOk(false); } catch (err) { console.error("Logout error:", err); } };
 
-  const sv = useCallback((it) => { writeItem(it); setEditId(null); setView("list"); }, []);
+  // Check trùng theo Mã (không phân biệt SD/RFI). Bỏ qua khi so với chính nó.
+  const isDup = useCallback((code, excludeId = null) => {
+    if (!code) return false;
+    const c = code.trim().toLowerCase();
+    return items.some(x => x.id !== excludeId && (x.code || "").trim().toLowerCase() === c);
+  }, [items]);
+
+  const sv = useCallback((it) => {
+    if (isDup(it.code, it.id)) {
+      showToast(`Mã "${it.code}" đã tồn tại!`, "error");
+      return;
+    }
+    writeItem(it); setEditId(null); setView("list");
+  }, [isDup]);
   const dl = useCallback((id) => { items.forEach(x => { if ((x.links || []).includes(id)) { updateItem(x.id, { links: (x.links || []).filter(l => l !== id) }); } }); deleteItem(id); if (detId === id) setDetId(null); }, [items, detId]);
-  const handleImport = useCallback((newItems) => { newItems.forEach(it => writeItem(it)); setShowImport(false); showToast(`Đã nhập ${newItems.length} bản ghi!`); }, []);
+  const handleImport = useCallback((newItems) => {
+    // Loại bỏ trùng nội bộ trong batch (giữ bản đầu tiên)
+    const seen = new Set();
+    const unique = [];
+    for (const it of newItems) {
+      const k = (it.code || "").trim().toLowerCase();
+      if (!it.code || seen.has(k)) continue;
+      seen.add(k);
+      unique.push(it);
+    }
+    // Loại bỏ trùng với data hiện có
+    const existingKeys = new Set(items.map(x => (x.code || "").trim().toLowerCase()));
+    const toAdd = unique.filter(it => !existingKeys.has((it.code || "").trim().toLowerCase()));
+    const skipped = newItems.length - toAdd.length;
+    toAdd.forEach(it => writeItem(it));
+    setShowImport(false);
+    if (skipped > 0) {
+      showToast(`Đã nhập ${toAdd.length} bản ghi · Bỏ qua ${skipped} dòng trùng`, toAdd.length > 0 ? "success" : "error");
+    } else {
+      showToast(`Đã nhập ${toAdd.length} bản ghi!`);
+    }
+  }, [items]);
 
   const uq = k => [...new Set(items.map(i => i[k]).filter(Boolean))].sort();
   const bls = useMemo(() => uq("block"), [items]);
@@ -402,19 +545,28 @@ export default function App() {
   }), [items, tab, fl]);
 
   // Sort logic
-  const SORT_KEYS = { "Mã": "code", "Tên": "name", "Block": "block", "Tầng": "floor", "BP": "dept", "HM": "cat", "Người vẽ": "who", "Đệ trình": "sub", "TT": "status", "KH": "planDate", "TT nộp": "actualDate", "Duyệt": "_approvalDate", "Trễ": "_late" };
+  // Cột bảng tùy theo loại tab.
+  // SD: KH nộp, TT nộp, Trễ trình, KH duyệt, TT duyệt, Delay
+  // RFI: TT nộp, KH đóng, TT đóng, Delay
+  const SORT_KEYS_SD = { "Mã": "code", "Tên": "name", "Block": "block", "Tầng": "floor", "BP": "dept", "HM": "cat", "Người vẽ": "who", "Đệ trình": "sub", "TT": "status", "KH nộp": "planDate", "TT nộp": "actualDate", "Trễ trình": "_subDelay", "KH duyệt": "_apprPlan", "TT duyệt": "approveDate", "Delay": "_late" };
+  const SORT_KEYS_RFI = { "Mã": "code", "Tên": "name", "Block": "block", "Tầng": "floor", "BP": "dept", "HM": "cat", "Người vẽ": "who", "Đệ trình": "sub", "TT": "status", "TT nộp": "actualDate", "KH đóng": "_apprPlan", "TT đóng": "approveDate", "Delay": "_late" };
+  const SORT_KEYS = tab === "RFI" ? SORT_KEYS_RFI : SORT_KEYS_SD;
+  const COL_LABELS = tab === "RFI"
+    ? ["Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "Đệ trình", "TT", "TT nộp", "KH đóng", "TT đóng", "Delay"]
+    : ["Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "Đệ trình", "TT", "KH nộp", "TT nộp", "Trễ trình", "KH duyệt", "TT duyệt", "Delay"];
   const toggleSort = (colLabel) => { const key = SORT_KEYS[colLabel]; if (!key) return; if (sortCol === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); } else { setSortCol(key); setSortDir("asc"); } };
   const sorted = useMemo(() => {
     if (!sortCol) return flt;
     return [...flt].sort((a, b) => {
       let va, vb;
-      if (sortCol === "_approvalDate") { va = ad(a.planDate, a.offset) || ""; vb = ad(b.planDate, b.offset) || ""; }
+      if (sortCol === "_apprPlan") { va = apprPlan(a) || ""; vb = apprPlan(b) || ""; }
       else if (sortCol === "_late") { va = ld(a) ?? -1; vb = ld(b) ?? -1; return sortDir === "asc" ? va - vb : vb - va; }
+      else if (sortCol === "_subDelay") { va = subDelay(a) ?? -1; vb = subDelay(b) ?? -1; return sortDir === "asc" ? va - vb : vb - va; }
       else { va = a[sortCol] ?? ""; vb = b[sortCol] ?? ""; }
       if (typeof va === "number" && typeof vb === "number") return sortDir === "asc" ? va - vb : vb - va;
       return sortDir === "asc" ? String(va).localeCompare(String(vb), "vi") : String(vb).localeCompare(String(va), "vi");
     });
-  }, [flt, sortCol, sortDir]);
+  }, [flt, sortCol, sortDir, tab]);
 
   // Selection handlers
   const toggleSelect = (id, shiftKey = false) => {
@@ -457,14 +609,16 @@ export default function App() {
   const stats = useMemo(() => {
     const src = dashItems; const bS = {}, bR = { late: 0, high: 0, med: 0, ok: 0, done: 0, reject: 0, none: 0 }, bB = {}, bC = {}, bP = {}, bD = {};
     ST.forEach(s => bS[s.k] = 0);
-    src.forEach(it => { bS[it.status]++; bR[rsk(it)]++; if (it.block) bB[it.block] = (bB[it.block] || 0) + 1; if (it.cat) bC[it.cat] = (bC[it.cat] || 0) + 1; if (it.who) bP[it.who] = (bP[it.who] || 0) + 1; if (it.dept) bD[it.dept] = (bD[it.dept] || 0) + 1; });
+    ST_RFI.forEach(s => bS[s.k] = 0);
+    src.forEach(it => { bS[it.status] = (bS[it.status] || 0) + 1; bR[rsk(it)]++; if (it.block) bB[it.block] = (bB[it.block] || 0) + 1; if (it.cat) bC[it.cat] = (bC[it.cat] || 0) + 1; if (it.who) bP[it.who] = (bP[it.who] || 0) + 1; if (it.dept) bD[it.dept] = (bD[it.dept] || 0) + 1; });
     return { bS, bR, bB, bC, bP, bD, tot: src.length, sd: src.filter(i => i.type === "SD").length, rfi: src.filter(i => i.type === "RFI").length };
   }, [dashItems]);
 
   const fullStats = useMemo(() => {
     const bS = {}, bR = { late: 0, high: 0, med: 0, ok: 0, done: 0, reject: 0, none: 0 }, bB = {}, bC = {}, bP = {}, bD = {};
     ST.forEach(s => bS[s.k] = 0);
-    items.forEach(it => { bS[it.status]++; bR[rsk(it)]++; if (it.block) bB[it.block] = (bB[it.block] || 0) + 1; if (it.cat) bC[it.cat] = (bC[it.cat] || 0) + 1; if (it.who) bP[it.who] = (bP[it.who] || 0) + 1; if (it.dept) bD[it.dept] = (bD[it.dept] || 0) + 1; });
+    ST_RFI.forEach(s => bS[s.k] = 0);
+    items.forEach(it => { bS[it.status] = (bS[it.status] || 0) + 1; bR[rsk(it)]++; if (it.block) bB[it.block] = (bB[it.block] || 0) + 1; if (it.cat) bC[it.cat] = (bC[it.cat] || 0) + 1; if (it.who) bP[it.who] = (bP[it.who] || 0) + 1; if (it.dept) bD[it.dept] = (bD[it.dept] || 0) + 1; });
     return { bS, bR, bB, bC, bP, bD, tot: items.length, sd: items.filter(i => i.type === "SD").length, rfi: items.filter(i => i.type === "RFI").length };
   }, [items]);
 
@@ -473,7 +627,7 @@ export default function App() {
   // Dashboard useMemo hooks (MUST be before early returns)
   const sdItemsDash = useMemo(() => dashItems.filter(i => i.type === "SD"), [dashItems]);
   const rfiItemsDash = useMemo(() => dashItems.filter(i => i.type === "RFI"), [dashItems]);
-  const openItems = useMemo(() => dashItems.filter(i => !["DA_DUYET", "DUYET_GC"].includes(i.status) && i.planDate), [dashItems]);
+  const openItems = useMemo(() => dashItems.filter(i => !isDone(i) && i.planDate), [dashItems]);
   const aging = useMemo(() => {
     const buckets = [0, 0, 0, 0];
     openItems.forEach(it => { const d = dd(td(), it.planDate); if (d === null || d <= 0) return; if (d <= 3) buckets[0]++; else if (d <= 7) buckets[1]++; else if (d <= 14) buckets[2]++; else buckets[3]++; });
@@ -487,7 +641,7 @@ export default function App() {
   }, [dashItems]);
 
   const det = detId ? items.find(x => x.id === detId) : null;
-  const eIt = editId === "ns" ? { id: Date.now().toString(36), type: "SD", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "DANG_VE", planDate: "", actualDate: "", offset: 7, rev: 0, links: [], notes: [] } : editId === "nr" ? { id: Date.now().toString(36), type: "RFI", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "DANG_VE", planDate: "", actualDate: "", offset: 3, rev: 0, links: [], notes: [] } : items.find(x => x.id === editId);
+  const eIt = editId === "ns" ? { id: Date.now().toString(36), type: "SD", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "DANG_VE", planDate: "", actualDate: "", approveDate: "", offset: 7, rev: 0, links: [], notes: [] } : editId === "nr" ? { id: Date.now().toString(36), type: "RFI", code: "", name: "", block: "", floor: "", dept: "CIV", cat: "", who: "", sub: "", status: "OPEN", planDate: "", actualDate: "", approveDate: "", offset: 3, rev: 0, links: [], notes: [] } : items.find(x => x.id === editId);
 
   if (authLoading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0F172A", color: "#F1F5F9" }}>Đang tải...</div>;
   if (!user) return (
@@ -500,17 +654,17 @@ export default function App() {
         </button></div></div>);
   if (!ok) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0F172A", color: "#F1F5F9" }}>Đang đồng bộ dữ liệu...</div>;
 
-  const done = (stats.bS.DA_DUYET || 0) + (stats.bS.DUYET_GC || 0);
+  const done = dashItems.filter(i => isDone(i)).length;
   const pct = stats.tot ? Math.round(done / stats.tot * 100) : 0;
   const sData = ST.map(s => ({ l: s.l, v: stats.bS[s.k] || 0, c: s.c }));
   const rData = Object.entries(RC).filter(([k]) => k !== "none").map(([k, v]) => ({ l: v.l, v: stats.bR[k] || 0, c: v.c }));
 
   // Dashboard derived (non-hook, safe after early return)
-  const sdApproved = sdItemsDash.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
-  const sdPending = sdItemsDash.filter(i => ["CHO_REVIEW", "CHO_DUYET", "DANG_VE"].includes(i.status)).length;
+  const sdApproved = sdItemsDash.filter(i => isDone(i)).length;
+  const sdPending = sdItemsDash.filter(i => !isDone(i) && i.status !== "REJECT").length;
   const sdOverdue = sdItemsDash.filter(i => rsk(i) === "late").length;
-  const rfiClosed = rfiItemsDash.filter(i => ["DA_DUYET", "DUYET_GC"].includes(i.status)).length;
-  const rfiOpen = rfiItemsDash.filter(i => !["DA_DUYET", "DUYET_GC", "REJECT"].includes(i.status)).length;
+  const rfiClosed = rfiItemsDash.filter(i => isDone(i)).length;
+  const rfiOpen = rfiItemsDash.filter(i => !isDone(i)).length;
   const rfiOverdue = rfiItemsDash.filter(i => rsk(i) === "late").length;
   const totalOverdue = stats.bR.late;
   const sdPct2 = sdItemsDash.length ? Math.round(sdApproved / sdItemsDash.length * 100) : 0;
@@ -742,7 +896,7 @@ export default function App() {
       {/* LIST */}
       {view === "list" && <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #1E293B" }}>
-          {["SD", "RFI"].map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "7px 18px", border: "none", borderBottom: tab === t ? "3px solid #3B82F6" : "3px solid transparent", background: "transparent", color: tab === t ? "#F1F5F9" : "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{t === "SD" ? "📐 SD" : "📝 RFI"}</button>)}
+          {["SD", "RFI"].map(t => <button key={t} onClick={() => { setTab(t); setFl(f => ({ ...f, st: "ALL" })); setSelected(new Set()); setLastSelId(null); }} style={{ padding: "7px 18px", border: "none", borderBottom: tab === t ? "3px solid #3B82F6" : "3px solid transparent", background: "transparent", color: tab === t ? "#F1F5F9" : "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{t === "SD" ? "📐 SD" : "📝 RFI"}</button>)}
         </div>
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
           <input placeholder="🔍 Tìm..." value={fl.q} onChange={e => setFl(f => ({ ...f, q: e.target.value }))} style={{ ...ss, flex: 1, minWidth: 100 }} />
@@ -751,7 +905,7 @@ export default function App() {
           <select value={fl.fl} onChange={e => setFl(f => ({ ...f, fl: e.target.value }))} style={ss}><option value="ALL">Tầng</option>{fls.map(f => <option key={f}>{f}</option>)}</select>
           <select value={fl.ct} onChange={e => setFl(f => ({ ...f, ct: e.target.value }))} style={ss}><option value="ALL">Hạng mục</option>{cts.map(c => <option key={c}>{c}</option>)}</select>
           <select value={fl.wh} onChange={e => setFl(f => ({ ...f, wh: e.target.value }))} style={ss}><option value="ALL">Người</option>{ppl.map(p => <option key={p}>{p}</option>)}</select>
-          <select value={fl.st} onChange={e => setFl(f => ({ ...f, st: e.target.value }))} style={ss}><option value="ALL">Trạng thái</option>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
+          <select value={fl.st} onChange={e => setFl(f => ({ ...f, st: e.target.value }))} style={ss}><option value="ALL">Trạng thái</option>{getStatusList(tab).map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
           <select value={fl.rk} onChange={e => setFl(f => ({ ...f, rk: e.target.value }))} style={ss}><option value="ALL">Rủi ro</option>{Object.entries(RC).map(([k, v]) => <option key={k} value={k}>{v.i}{v.l}</option>)}</select>
           {Object.values(fl).some(v => v !== "ALL" && v !== "") && <button onClick={() => setFl({ st: "ALL", rk: "ALL", bl: "ALL", ct: "ALL", wh: "ALL", fl: "ALL", dp: "ALL", q: "" })} style={{ ...ss, color: "#F87171", border: "1px solid #F87171", cursor: "pointer" }}>✕</button>}
         </div>
@@ -766,12 +920,19 @@ export default function App() {
             <thead><tr style={{ background: "#1E293B" }}>
               <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", width: 28 }}><input type="checkbox" checked={sorted.length > 0 && sorted.every(i => selected.has(i.id))} onChange={toggleSelectAll} style={{ cursor: "pointer" }} /></th>
               <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", width: 20 }}></th>
-              {["Mã", "Tên", "Block", "Tầng", "BP", "HM", "Người vẽ", "Đệ trình", "TT", "KH", "TT nộp", "Duyệt", "Trễ"].map((h, i) => <th key={i} onClick={() => toggleSort(h)} style={{ padding: "8px 4px", textAlign: "left", fontWeight: 600, color: SORT_KEYS[h] ? "#94A3B8" : "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10, cursor: SORT_KEYS[h] ? "pointer" : "default", userSelect: "none" }}>{h}{sortCol === SORT_KEYS[h] ? (sortDir === "asc" ? " ↑" : " ↓") : ""}</th>)}
+              {COL_LABELS.map((h, i) => <th key={i} onClick={() => toggleSort(h)} style={{ padding: "8px 4px", textAlign: "left", fontWeight: 600, color: SORT_KEYS[h] ? "#94A3B8" : "#64748B", whiteSpace: "nowrap", borderBottom: "1px solid #334155", fontSize: 10, cursor: SORT_KEYS[h] ? "pointer" : "default", userSelect: "none" }}>{h}{sortCol === SORT_KEYS[h] ? (sortDir === "asc" ? " ↑" : " ↓") : ""}</th>)}
               <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", fontSize: 10, color: "#64748B" }}>🔗</th>
               <th style={{ padding: "8px 4px", borderBottom: "1px solid #334155", fontSize: 10, color: "#64748B" }}>📝</th>
             </tr></thead>
-            <tbody>{!sorted.length ? <tr><td colSpan={17} style={{ padding: 30, textAlign: "center", color: "#475569" }}>Không có dữ liệu</td></tr> :
-              sorted.map(it => { const r = rsk(it), rc = RC[r], st = ST.find(s => s.k === it.status), l = ld(it), lk = (it.links || []).map(lid => items.find(x => x.id === lid)).filter(Boolean); const dpt = DEPTS.find(d => d.k === it.dept);
+            <tbody>{!sorted.length ? <tr><td colSpan={COL_LABELS.length + 4} style={{ padding: 30, textAlign: "center", color: "#475569" }}>Không có dữ liệu</td></tr> :
+              sorted.map(it => {
+                const r = rsk(it), rc = RC[r];
+                const stList = getStatusList(it.type);
+                const st = stList.find(s => s.k === it.status);
+                const l = ld(it);
+                const lk = (it.links || []).map(lid => items.find(x => x.id === lid)).filter(Boolean);
+                const dpt = DEPTS.find(d => d.k === it.dept);
+                const ap = apprPlan(it);
                 return <tr key={it.id} style={{ cursor: "pointer", borderBottom: "1px solid #1E293B", background: selected.has(it.id) ? "#1E3A5F" : "transparent" }} onMouseEnter={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "#1E293B"; }} onMouseLeave={e => { if (!selected.has(it.id)) e.currentTarget.style.background = "transparent"; }}>
                   <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(it.id)} onChange={() => {}} onClick={e => { e.stopPropagation(); toggleSelect(it.id, e.shiftKey); }} style={{ cursor: "pointer" }} /></td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{rc.i}</td>
@@ -784,15 +945,18 @@ export default function App() {
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.who || "—"}</td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{it.sub || "—"}</td>
                   <td style={{ padding: "6px 4px" }} onClick={e => e.stopPropagation()}>
-                    <select value={it.status} onChange={e => { handleStatusChange(it.id, e.target.value); }} style={{ padding: "2px 4px", borderRadius: 8, border: "none", background: st?.bg || "#F3F4F6", color: st?.c || "#6B7280", fontSize: 10, fontWeight: 600, cursor: "pointer", outline: "none", appearance: "auto" }}>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
+                    <select value={it.status} onChange={e => { handleStatusChange(it.id, e.target.value); }} style={{ padding: "2px 4px", borderRadius: 8, border: "none", background: st?.bg || "#F3F4F6", color: st?.c || "#6B7280", fontSize: 10, fontWeight: 600, cursor: "pointer", outline: "none", appearance: "auto" }}>{stList.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select>
                   </td>
-                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.planDate)}</td>
+                  {tab === "SD" && <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.planDate)}</td>}
                   <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.actualDate)}</td>
-                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(ad(it.planDate, it.offset))}</td>
+                  {tab === "SD" && (() => { const sd = subDelay(it); return <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{sd > 0 ? <Bd c="#EA580C" bg="#FFEDD5">+{sd}</Bd> : sd === 0 ? <span style={{ color: "#64748B" }}>0</span> : "—"}</td>; })()}
+                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(ap)}</td>
+                  <td style={{ padding: "6px 4px", fontFamily: "'JetBrains Mono'", fontSize: 9 }} onClick={() => setDetId(it.id)}>{fm(it.approveDate)}</td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{l > 0 ? <Bd c="#DC2626" bg="#FEE2E2">+{l}</Bd> : l === 0 ? <span style={{ color: "#64748B" }}>0</span> : "—"}</td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{lk.length > 0 && <span style={{ color: "#3B82F6" }}>🔗{lk.length}</span>}</td>
                   <td style={{ padding: "6px 4px" }} onClick={() => setDetId(it.id)}>{(it.notes || []).length > 0 && <span style={{ color: "#D97706" }}>📝{it.notes.length}</span>}</td>
-                </tr>; })}</tbody>
+                </tr>;
+              })}</tbody>
           </table>
         </div>
       </div>}
@@ -838,9 +1002,35 @@ function Detail({ item, items, canDel, onClose, onEdit, onLink, onUnlink, onNote
       {item.rev > 0 && <Bd c="#7C3AED" bg="#EDE9FE">Rev {item.rev}</Bd>}
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 14 }}>
-      {[["Bộ phận", item.dept], ["Hạng mục", item.cat], ["Người vẽ", item.who], ["Đệ trình", item.sub], ["Block", item.block], ["Tầng", item.floor], ["Offset", `+${item.offset}d`], ["KH nộp", fm(item.planDate)], ["Thực tế", fm(item.actualDate)], ["KH duyệt", fm(ad(item.planDate, item.offset))]].map(([k, v], i) =>
-        <div key={i}><div style={{ fontSize: 9, color: "#64748B" }}>{k}</div><div style={{ fontSize: 12, fontWeight: 600 }}>{v || "—"}</div></div>
-      )}
+      {(() => {
+        const isRFI = item.type === "RFI";
+        const sd = subDelay(item);
+        const baseFields = [
+          ["Bộ phận", item.dept],
+          ["Hạng mục", item.cat],
+          ["Người vẽ", item.who],
+          ["Đệ trình", item.sub],
+          ["Block", item.block],
+          ["Tầng", item.floor],
+          ["Offset", `+${item.offset}d`],
+        ];
+        const dateFields = isRFI
+          ? [
+              ["TT nộp", fm(item.actualDate)],
+              ["KH đóng", fm(apprPlan(item))],
+              ["TT đóng", fm(item.approveDate)],
+            ]
+          : [
+              ["KH nộp", fm(item.planDate)],
+              ["TT nộp", fm(item.actualDate)],
+              ["Trễ trình", sd > 0 ? `+${sd}d` : sd === 0 ? "0" : "—"],
+              ["KH duyệt", fm(apprPlan(item))],
+              ["TT duyệt", fm(item.approveDate)],
+            ];
+        return [...baseFields, ...dateFields].map(([k, v], i) =>
+          <div key={i}><div style={{ fontSize: 9, color: "#64748B" }}>{k}</div><div style={{ fontSize: 12, fontWeight: 600 }}>{v || "—"}</div></div>
+        );
+      })()}
     </div>
     <hr style={{ border: "none", borderTop: "1px solid #1E293B", margin: "8px 0" }} />
     <div style={{ marginBottom: 12 }}>
@@ -893,18 +1083,38 @@ function Detail({ item, items, canDel, onClose, onEdit, onLink, onUnlink, onNote
 // ─── Form ───
 function FormV({ item, onSave, onCancel }) {
   const [f, setF] = useState({ ...item }); const u = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const aDate = ad(f.planDate, f.offset); const r = rsk(f), rc = RC[r], l = ld(f);
+  const isRFI = f.type === "RFI";
+  const stList = getStatusList(f.type);
+  // KH duyệt/đóng tính từ TT nộp + offset (không phải KH nộp)
+  const apprPlanDate = apprPlan(f);
+  const r = rsk(f), rc = RC[r], l = ld(f);
+  const sd = subDelay(f);
   const catOptions = DEPT_CATS[f.dept] || [];
   const I = { padding: "8px 10px", borderRadius: 7, border: "1px solid #334155", background: "#0F172A", color: "#F1F5F9", fontSize: 12, width: "100%" };
   const L = { fontSize: 10, fontWeight: 600, color: "#64748B", marginBottom: 2 };
+  // Khi đổi loại, đảm bảo status hợp lệ với loại mới
+  const onChangeType = (newType) => {
+    setF(p => {
+      const next = { ...p, type: newType };
+      const validKeys = getStatusList(newType).map(s => s.k);
+      if (!validKeys.includes(next.status)) {
+        next.status = newType === "RFI" ? "OPEN" : "DANG_VE";
+      }
+      return next;
+    });
+  };
   return (<div style={{ maxWidth: 640, margin: "0 auto" }}><div style={{ background: "#1E293B", borderRadius: 10, padding: 18 }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
       <h2 style={{ fontSize: 16, fontWeight: 800 }}>{item.code ? "Sửa" : "Thêm"} {f.type}</h2>
-      <div style={{ display: "flex", gap: 5 }}><span>{rc.i}</span><Bd c={rc.c} bg={rc.bg}>{rc.l}</Bd>{l > 0 && <Bd c="#DC2626" bg="#FEE2E2">{l}d</Bd>}</div>
+      <div style={{ display: "flex", gap: 5 }}>
+        <span>{rc.i}</span><Bd c={rc.c} bg={rc.bg}>{rc.l}</Bd>
+        {sd > 0 && <Bd c="#EA580C" bg="#FFEDD5">Trễ trình {sd}d</Bd>}
+        {l > 0 && <Bd c="#DC2626" bg="#FEE2E2">Delay {l}d</Bd>}
+      </div>
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-      <div><div style={L}>Loại</div><select value={f.type} onChange={e => u("type", e.target.value)} style={I}><option>SD</option><option>RFI</option></select></div>
-      <div><div style={L}>Mã</div><input value={f.code} onChange={e => u("code", e.target.value)} style={I} placeholder="SD-KC-001" /></div>
+      <div><div style={L}>Loại</div><select value={f.type} onChange={e => onChangeType(e.target.value)} style={I}><option>SD</option><option>RFI</option></select></div>
+      <div><div style={L}>Mã</div><input value={f.code} onChange={e => u("code", e.target.value)} style={I} placeholder={isRFI ? "RFI-001" : "SD-KC-001"} /></div>
       <div style={{ gridColumn: "1/-1" }}><div style={L}>Tên</div><input value={f.name} onChange={e => u("name", e.target.value)} style={I} placeholder="MB cốp pha sàn T5" /></div>
       <div><div style={L}>Block</div><input value={f.block} onChange={e => u("block", e.target.value)} style={I} /></div>
       <div><div style={L}>Tầng</div><input value={f.floor} onChange={e => u("floor", e.target.value)} style={I} /></div>
@@ -917,11 +1127,12 @@ function FormV({ item, onSave, onCancel }) {
       <div><div style={L}>Rev</div><input type="number" min={0} value={f.rev} onChange={e => u("rev", +e.target.value || 0)} style={I} /></div>
       <div><div style={L}>Người vẽ</div><input value={f.who} onChange={e => u("who", e.target.value)} style={I} /></div>
       <div><div style={L}>Đệ trình</div><input value={f.sub} onChange={e => u("sub", e.target.value)} style={I} /></div>
-      <div><div style={L}>Trạng thái</div><select value={f.status} onChange={e => u("status", e.target.value)} style={I}>{ST.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select></div>
-      <div><div style={L}>KH nộp</div><input type="date" value={f.planDate} onChange={e => u("planDate", e.target.value)} style={I} /></div>
-      <div><div style={L}>Thực tế nộp</div><input type="date" value={f.actualDate} onChange={e => u("actualDate", e.target.value)} style={I} /></div>
-      <div><div style={L}>Offset duyệt</div><div style={{ display: "flex", gap: 3 }}>{[3, 5, 7, 10, 14].map(n => <button key={n} onClick={() => u("offset", n)} style={{ flex: 1, padding: "7px 0", borderRadius: 5, border: "1px solid", fontSize: 11, fontWeight: 700, cursor: "pointer", borderColor: f.offset === n ? "#3B82F6" : "#334155", background: f.offset === n ? "#3B82F6" : "transparent", color: f.offset === n ? "#fff" : "#64748B" }}>+{n}</button>)}</div></div>
-      <div><div style={L}>KH duyệt</div><div style={{ ...I, background: "#1E293B", fontFamily: "'JetBrains Mono'" }}>{aDate ? fm(aDate) : "—"}</div></div>
+      <div><div style={L}>Trạng thái</div><select value={f.status} onChange={e => u("status", e.target.value)} style={I}>{stList.map(s => <option key={s.k} value={s.k}>{s.l}</option>)}</select></div>
+      {!isRFI && <div><div style={L}>KH nộp</div><input type="date" value={f.planDate || ""} onChange={e => u("planDate", e.target.value)} style={I} /></div>}
+      <div><div style={L}>TT nộp</div><input type="date" value={f.actualDate || ""} onChange={e => u("actualDate", e.target.value)} style={I} /></div>
+      <div><div style={L}>Offset {isRFI ? "đóng" : "duyệt"}</div><div style={{ display: "flex", gap: 3 }}>{[3, 5, 7, 10, 14].map(n => <button key={n} onClick={() => u("offset", n)} style={{ flex: 1, padding: "7px 0", borderRadius: 5, border: "1px solid", fontSize: 11, fontWeight: 700, cursor: "pointer", borderColor: f.offset === n ? "#3B82F6" : "#334155", background: f.offset === n ? "#3B82F6" : "transparent", color: f.offset === n ? "#fff" : "#64748B" }}>+{n}</button>)}</div></div>
+      <div><div style={L}>{isRFI ? "KH đóng" : "KH duyệt"} <span style={{ color: "#64748B", fontWeight: 400 }}>(TT nộp + offset)</span></div><div style={{ ...I, background: "#1E293B", fontFamily: "'JetBrains Mono'" }}>{apprPlanDate ? fm(apprPlanDate) : "—"}</div></div>
+      <div><div style={L}>{isRFI ? "TT đóng" : "TT duyệt"}</div><input type="date" value={f.approveDate || ""} onChange={e => u("approveDate", e.target.value)} style={I} /></div>
     </div>
     <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
       <button onClick={onCancel} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#94A3B8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Hủy</button>
