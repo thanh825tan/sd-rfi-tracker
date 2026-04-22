@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { db, auth, storage, googleProvider, ref, onValue, set, remove, update, signInWithPopup, signOut, onAuthStateChanged, storageRef, uploadBytes, getDownloadURL } from "./firebase";
+import { db, storage, ref, onValue, set, remove, update, storageRef, uploadBytes, getDownloadURL } from "./firebase";
 
 // ─── Constants ───
 // ROLE SYSTEM: 3 cấp bậc
@@ -21,7 +21,6 @@ const DEFAULT_USERS = {
 const canDelete = (role) => role === "owner";
 const canEdit = (role) => role === "owner" || role === "editor";
 const canImport = (role) => role === "owner" || role === "editor";
-const canExport = (role) => true;
 
 const ST = [
   { k: "DANG_VE", l: "Đang vẽ", c: "#6366F1", bg: "#EEF2FF" },
@@ -279,7 +278,7 @@ function mapRowToItem(row, index) {
   function parseDate(val) {
     if (!val) return ""; val = val.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
-    const m = val.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    const m = val.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
     if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
     return "";
   }
@@ -332,7 +331,7 @@ function generateReportHTML(items, stats) {
     if (!list.length) return "<p style='color:#64748B;padding:12px'>Không có dữ liệu</p>";
     return `<table><thead><tr><th>Mã</th><th>Tên</th><th>Block</th><th>Tầng</th><th>BP</th><th>HM</th><th>Người vẽ</th><th>Trạng thái</th><th>KH nộp</th><th>TT nộp</th><th>Trễ trình</th><th>KH duyệt</th><th>TT duyệt</th><th>Delay</th><th>Nguyên nhân</th></tr></thead>
     <tbody>${list.map(it => {
-      const st = getStatusItem(it.type, it.status); const r = rsk(it); const l = ld(it); const sd = subDelay(it);
+      const st = getStatusItem(it.type, it.status); const l = ld(it); const sd = subDelay(it);
       const dpt = DEPTS.find(d => d.k === it.dept);
       const rcLabel = ROOT_CAUSES.find(rc => rc.k === it.rootCause)?.l || "—";
       return `<tr><td style="font-weight:700;font-family:monospace">${it.code}</td><td>${it.name||"—"}</td><td>${it.block}</td><td>${it.floor}</td>
@@ -789,10 +788,10 @@ export default function App() {
     updateItem(id, { status: newStatus });
   }, []);
 
-  const uq = k => [...new Set(items.map(i => i[k]).filter(Boolean))].sort();
-  const bls = useMemo(() => uq("block"), [items]);
-  const cts = useMemo(() => uq("cat"), [items]);
-  const fls = useMemo(() => uq("floor"), [items]);
+  const uq = useCallback((k) => [...new Set(items.map(i => i[k]).filter(Boolean))].sort(), [items]);
+  const bls = useMemo(() => uq("block"), [uq]);
+  const cts = useMemo(() => uq("cat"), [uq]);
+  const fls = useMemo(() => uq("floor"), [uq]);
   const ppl = useMemo(() => [...new Set([...items.map(i => i.who), ...items.map(i => i.sub)].filter(Boolean))].sort(), [items]);
 
   const dashItems = useMemo(() => items.filter(it => {
@@ -803,7 +802,7 @@ export default function App() {
     return true;
   }), [items, dashFl]);
 
-  const dashBls = useMemo(() => uq("block"), [items]);
+  const dashBls = useMemo(() => uq("block"), [uq]);
   const dashFls = useMemo(() => { let b = items; if (dashFl.bl !== "ALL") b = b.filter(i => i.block === dashFl.bl); if (dashFl.dp !== "ALL") b = b.filter(i => i.dept === dashFl.dp); return [...new Set(b.map(i => i.floor).filter(Boolean))].sort(); }, [items, dashFl.bl, dashFl.dp]);
   const dashCts = useMemo(() => { let b = items; if (dashFl.bl !== "ALL") b = b.filter(i => i.block === dashFl.bl); if (dashFl.fl !== "ALL") b = b.filter(i => i.floor === dashFl.fl); if (dashFl.dp !== "ALL") b = b.filter(i => i.dept === dashFl.dp); return [...new Set(b.map(i => i.cat).filter(Boolean))].sort(); }, [items, dashFl.bl, dashFl.fl, dashFl.dp]);
 
@@ -838,7 +837,7 @@ export default function App() {
       if (typeof va === "number" && typeof vb === "number") return sortDir === "asc" ? va - vb : vb - va;
       return sortDir === "asc" ? String(va).localeCompare(String(vb), "vi") : String(vb).localeCompare(String(va), "vi");
     });
-  }, [flt, sortCol, sortDir, tab]);
+  }, [flt, sortCol, sortDir]);
 
   const toggleSelect = (id, shiftKey = false) => {
     if (shiftKey && lastSelId && lastSelId !== id) {
@@ -946,8 +945,8 @@ export default function App() {
   const kpiData = useMemo(() => {
     const rfiItems = dashItems.filter(i => i.type === "RFI");
     const closedRFIs = rfiItems.filter(i => normRfiStatus(i.status) === "CLOSED");
-    const rfiOnTime = closedRFIs.filter(i => { const l = ld(i); return l !== null && l <= 0; }).length;
-    const rfiOnTimePct = closedRFIs.length ? Math.round(rfiOnTimePct / closedRFIs.length * 100) : 0;
+    const rfiOnTime = closedRFIs.filter(i => { const l2 = ld(i); return l2 !== null && l2 <= 0; }).length;
+    const rfiOnTimePct = closedRFIs.length ? Math.round(rfiOnTime / closedRFIs.length * 100) : 0;
 
     const sdItems = dashItems.filter(i => i.type === "SD");
     const sdDone = sdItems.filter(i => isDone(i));
@@ -956,11 +955,8 @@ export default function App() {
 
     const lateOnCritical = dashItems.filter(i => rsk(i) === "late" && (i.links || []).length > 0).length;
 
-    // Recalculate rfiOnTimePct correctly
-    const correctRfiOnTimePct = closedRFIs.length ? Math.round(rfiOnTime / closedRFIs.length * 100) : 0;
-
     return {
-      rfiOnTimePct: correctRfiOnTimePct,
+      rfiOnTimePct,
       avgResponseTime: responseTimeAnalysis.avgResponseTime,
       sdFirstPassPct,
       lateOnCritical,
