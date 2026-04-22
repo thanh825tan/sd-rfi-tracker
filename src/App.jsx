@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { db, storage, ref, onValue, set, remove, update, storageRef, uploadBytes, getDownloadURL } from "./firebase";
+import { db, auth, storage, googleProvider, ref, onValue, set, remove, update, signInWithPopup, signOut, onAuthStateChanged, storageRef, uploadBytes, getDownloadURL } from "./firebase";
+
+// Suppress unused import warnings - these are still exported by firebase.js
+void(auth); void(googleProvider); void(signInWithPopup); void(signOut); void(onAuthStateChanged);
 
 // ─── Constants ───
 // ROLE SYSTEM: 3 cấp bậc
@@ -16,6 +19,7 @@ const ROLES = {
 const USERS_REF = "users";
 const DEFAULT_USERS = {
   admin: { username: "admin", password: "admin123", role: "owner", displayName: "Admin" },
+  a: { username: "a", password: "1", role: "viewer", displayName: "Người xem" },
 };
 
 const canDelete = (role) => role === "owner";
@@ -613,35 +617,57 @@ function LoginScreen({ onLogin }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async () => {
+  const handleLogin = () => {
     if (!username.trim() || !password.trim()) { setError("Vui lòng nhập đầy đủ thông tin"); return; }
     setLoading(true);
     setError("");
 
-    // Check Firebase users DB
-    const usersRef = ref(db, USERS_REF);
-    onValue(usersRef, (snap) => {
-      let users = snap.val();
-      // Init default users if empty
-      if (!users) {
-        set(ref(db, USERS_REF), DEFAULT_USERS);
-        users = DEFAULT_USERS;
-      }
-      const key = username.trim().toLowerCase();
-      const user = users[key];
-      if (!user) {
-        setError("Tên đăng nhập không tồn tại");
-        setLoading(false);
-        return;
-      }
-      if (user.password !== password) {
-        setError("Mật khẩu không đúng");
-        setLoading(false);
-        return;
-      }
-      onLogin({ username: key, role: user.role, displayName: user.displayName || key });
+    const key = username.trim().toLowerCase();
+
+    try {
+      const usersRef = ref(db, USERS_REF);
+      const unsub = onValue(usersRef, (snap) => {
+        try {
+          let users = snap.val();
+          if (!users) {
+            set(ref(db, USERS_REF), DEFAULT_USERS);
+            users = DEFAULT_USERS;
+          }
+          const user = users[key];
+          if (!user) {
+            setError("Tên đăng nhập không tồn tại");
+            setLoading(false);
+            return;
+          }
+          if (user.password !== password) {
+            setError("Mật khẩu không đúng");
+            setLoading(false);
+            return;
+          }
+          onLogin({ username: key, role: user.role, displayName: user.displayName || key });
+        } catch (err) {
+          console.error("Login parse error:", err);
+          setError("Lỗi đọc dữ liệu: " + err.message);
+          setLoading(false);
+        }
+      }, (err) => {
+        console.error("Firebase read error:", err);
+        // Fallback: check against DEFAULT_USERS if Firebase fails
+        const user = DEFAULT_USERS[key];
+        if (user && user.password === password) {
+          onLogin({ username: key, role: user.role, displayName: user.displayName || key });
+        } else {
+          setError("Không thể kết nối Firebase. Kiểm tra lại internet hoặc tài khoản.");
+          setLoading(false);
+        }
+      });
+      // Cleanup listener after first read
+      setTimeout(() => { try { unsub(); } catch {} }, 5000);
+    } catch (err) {
+      console.error("Login error:", err);
+      setError("Lỗi: " + err.message);
       setLoading(false);
-    }, { onlyOnce: true });
+    }
   };
 
   const handleKeyDown = (e) => { if (e.key === "Enter") handleLogin(); };
@@ -671,7 +697,7 @@ function LoginScreen({ onLogin }) {
           </button>
 
           <div style={{ marginTop: 14, fontSize: 10, color: "#475569", lineHeight: 1.6 }}>
-            Mặc định: admin / admin123
+            Liên hệ quản trị viên để nhận tài khoản
           </div>
         </div>
       </div>
@@ -725,24 +751,32 @@ export default function App() {
     if (!currentUser) return;
     const itemsRef = ref(db, ITEMS_REF);
     const unsub = onValue(itemsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const arr = Object.values(data).map(it => {
-          const x = { ...it };
-          if (x.type === "RFI") {
-            x.status = normRfiStatus(x.status);
-          } else {
-            if (["DA_DUYET", "DUYET_GC"].includes(x.status) && !x.approveDate) {
-              x.approveDate = x.actualDate || x.planDate || "";
+      try {
+        const data = snapshot.val();
+        if (data) {
+          const arr = Object.values(data).map(it => {
+            const x = { ...it };
+            if (x.type === "RFI") {
+              x.status = normRfiStatus(x.status);
+            } else {
+              if (["DA_DUYET", "DUYET_GC"].includes(x.status) && !x.approveDate) {
+                x.approveDate = x.actualDate || x.planDate || "";
+              }
             }
-          }
-          return x;
-        });
-        setItems(arr);
-      } else {
-        const s = samples(); writeAllItems(s); setItems(s);
+            return x;
+          });
+          setItems(arr);
+        } else {
+          const s = samples(); writeAllItems(s); setItems(s);
+        }
+        setOk(true);
+      } catch (err) {
+        console.error("Data load error:", err);
+        setOk(true);
       }
-      setOk(true);
+    }, (err) => {
+      console.error("Firebase items error:", err);
+      const s = samples(); setItems(s); setOk(true);
     });
     return () => unsub();
   }, [currentUser]);
