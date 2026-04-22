@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { db, auth, storage, googleProvider, ref, onValue, set, remove, update, signInWithPopup, signOut, onAuthStateChanged, storageRef, uploadBytes, getDownloadURL } from "./firebase";
-
-// Suppress unused import warnings - these are still exported by firebase.js
-void(auth); void(googleProvider); void(signInWithPopup); void(signOut); void(onAuthStateChanged);
+import { db, storage, ref, onValue, set, remove, update, storageRef, uploadBytes, getDownloadURL } from "./firebase";
+/* eslint-disable no-unused-vars */
+import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged } from "./firebase";
+/* eslint-enable no-unused-vars */
 
 // ─── Constants ───
 // ROLE SYSTEM: 3 cấp bậc
@@ -614,91 +614,104 @@ function UserManageModal({ onClose }) {
 function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+  const [mode, setMode] = useState("login"); // login | register
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) { setError("Vui lòng nhập đầy đủ thông tin"); return; }
     setLoading(true);
     setError("");
-
     const key = username.trim().toLowerCase();
-
     try {
       const usersRef = ref(db, USERS_REF);
       const unsub = onValue(usersRef, (snap) => {
         try {
-          let users = snap.val();
+          unsub(); // stop listening immediately
+          var users = snap.val();
           if (!users) {
             set(ref(db, USERS_REF), DEFAULT_USERS);
             users = DEFAULT_USERS;
           }
-          const user = users[key];
-          if (!user) {
-            setError("Tên đăng nhập không tồn tại");
-            setLoading(false);
-            return;
-          }
-          if (user.password !== password) {
-            setError("Mật khẩu không đúng");
-            setLoading(false);
-            return;
-          }
+          var user = users[key];
+          if (!user) { setError("Tên đăng nhập không tồn tại"); setLoading(false); return; }
+          if (user.password !== password) { setError("Mật khẩu không đúng"); setLoading(false); return; }
           onLogin({ username: key, role: user.role, displayName: user.displayName || key });
-        } catch (err) {
-          console.error("Login parse error:", err);
-          setError("Lỗi đọc dữ liệu: " + err.message);
-          setLoading(false);
-        }
-      }, (err) => {
-        console.error("Firebase read error:", err);
-        // Fallback: check against DEFAULT_USERS if Firebase fails
-        const user = DEFAULT_USERS[key];
+        } catch (err) { setError("Lỗi: " + err.message); setLoading(false); }
+      }, function(err) {
+        var user = DEFAULT_USERS[key];
         if (user && user.password === password) {
           onLogin({ username: key, role: user.role, displayName: user.displayName || key });
-        } else {
-          setError("Không thể kết nối Firebase. Kiểm tra lại internet hoặc tài khoản.");
-          setLoading(false);
-        }
+        } else { setError("Không thể kết nối. Kiểm tra internet."); setLoading(false); }
       });
-      // Cleanup listener after first read
-      setTimeout(() => { try { unsub(); } catch {} }, 5000);
-    } catch (err) {
-      console.error("Login error:", err);
-      setError("Lỗi: " + err.message);
-      setLoading(false);
-    }
+    } catch (err) { setError("Lỗi: " + err.message); setLoading(false); }
   };
 
-  const handleKeyDown = (e) => { if (e.key === "Enter") handleLogin(); };
+  const handleRegister = () => {
+    if (!username.trim() || !password.trim()) { setError("Vui lòng nhập đầy đủ thông tin"); return; }
+    if (password.trim().length < 3) { setError("Mật khẩu tối thiểu 3 ký tự"); return; }
+    setLoading(true);
+    setError("");
+    const key = username.trim().toLowerCase();
+    try {
+      const usersRef = ref(db, USERS_REF);
+      const unsub = onValue(usersRef, (snap) => {
+        try {
+          unsub();
+          var users = snap.val() || {};
+          if (!users.admin) {
+            set(ref(db, USERS_REF), DEFAULT_USERS);
+            users = DEFAULT_USERS;
+          }
+          if (users[key]) { setError("Tên đăng nhập đã tồn tại"); setLoading(false); return; }
+          var newUser = { username: key, password: password.trim(), role: "viewer", displayName: displayName.trim() || key };
+          set(ref(db, USERS_REF + "/" + key), newUser);
+          onLogin({ username: key, role: "viewer", displayName: newUser.displayName });
+        } catch (err) { setError("Lỗi: " + err.message); setLoading(false); }
+      }, function(err) { setError("Không thể kết nối. Kiểm tra internet."); setLoading(false); });
+    } catch (err) { setError("Lỗi: " + err.message); setLoading(false); }
+  };
+
+  var handleKeyDown = function(e) { if (e.key === "Enter") { mode === "login" ? handleLogin() : handleRegister(); } };
+  var IS = { padding: "10px 14px", borderRadius: 8, border: "1px solid #334155", background: "#0F172A", color: "#F1F5F9", fontSize: 13, width: "100%", outline: "none" };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0F172A", flexDirection: "column", gap: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0F172A", flexDirection: "column" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Plus Jakarta Sans',sans-serif}`}</style>
-      <div style={{ textAlign: "center", width: "100%", maxWidth: 360, padding: "0 20px" }}>
+      <div style={{ textAlign: "center", width: "100%", maxWidth: 380, padding: "0 20px" }}>
         <div style={{ fontSize: 48, marginBottom: 12 }}>📐</div>
         <h1 style={{ fontSize: 24, fontWeight: 800, color: "#F1F5F9", marginBottom: 6 }}>SD & RFI Tracker</h1>
         <p style={{ fontSize: 13, color: "#64748B", marginBottom: 28 }}>Wealthcons · Quản lý Shop Drawing & RFI</p>
-
         <div style={{ background: "#1E293B", borderRadius: 12, padding: 24 }}>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#64748B", marginBottom: 4, textAlign: "left" }}>Tên đăng nhập</div>
-            <input value={username} onChange={e => setUsername(e.target.value)} onKeyDown={handleKeyDown} placeholder="Nhập tên đăng nhập" style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #334155", background: "#0F172A", color: "#F1F5F9", fontSize: 13, width: "100%", outline: "none" }} autoFocus />
+          <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 8, overflow: "hidden", border: "1px solid #334155" }}>
+            {["login", "register"].map(function(m) {
+              return <button key={m} onClick={function() { setMode(m); setError(""); }} style={{ flex: 1, padding: "8px 0", border: "none", background: mode === m ? "#3B82F6" : "transparent", color: mode === m ? "#fff" : "#64748B", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m === "login" ? "Đăng nhập" : "Đăng ký"}</button>;
+            })}
           </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#64748B", marginBottom: 4, textAlign: "left" }}>Tên đăng nhập</div>
+            <input value={username} onChange={function(e) { setUsername(e.target.value); }} onKeyDown={handleKeyDown} placeholder="Nhập tên đăng nhập" style={IS} autoFocus />
+          </div>
+          {mode === "register" && <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#64748B", marginBottom: 4, textAlign: "left" }}>Tên hiển thị</div>
+            <input value={displayName} onChange={function(e) { setDisplayName(e.target.value); }} onKeyDown={handleKeyDown} placeholder="VD: Nguyễn Văn A" style={IS} />
+          </div>}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: "#64748B", marginBottom: 4, textAlign: "left" }}>Mật khẩu</div>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={handleKeyDown} placeholder="Nhập mật khẩu" style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #334155", background: "#0F172A", color: "#F1F5F9", fontSize: 13, width: "100%", outline: "none" }} />
+            <div style={{ position: "relative" }}>
+              <input type={showPw ? "text" : "password"} value={password} onChange={function(e) { setPassword(e.target.value); }} onKeyDown={handleKeyDown} placeholder="Nhập mật khẩu" style={{ ...IS, paddingRight: 40 }} />
+              <button onClick={function() { setShowPw(!showPw); }} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#64748B", fontSize: 16, cursor: "pointer", padding: 4 }}>{showPw ? "🙈" : "👁️"}</button>
+            </div>
           </div>
-
           {error && <div style={{ color: "#EF4444", fontSize: 12, marginBottom: 10, padding: "6px 10px", background: "#FEE2E2", borderRadius: 6, textAlign: "left" }}>{error}</div>}
-
-          <button onClick={handleLogin} disabled={loading} style={{ padding: "12px 0", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #3B82F6, #8B5CF6)", color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer", width: "100%", opacity: loading ? 0.7 : 1 }}>
-            {loading ? "Đang đăng nhập..." : "🔐 Đăng nhập"}
+          <button onClick={mode === "login" ? handleLogin : handleRegister} disabled={loading} style={{ padding: "12px 0", borderRadius: 10, border: "none", background: mode === "login" ? "linear-gradient(135deg, #3B82F6, #8B5CF6)" : "linear-gradient(135deg, #059669, #0D9488)", color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer", width: "100%", opacity: loading ? 0.7 : 1 }}>
+            {loading ? "Đang xử lý..." : mode === "login" ? "🔐 Đăng nhập" : "📝 Đăng ký"}
           </button>
-
-          <div style={{ marginTop: 14, fontSize: 10, color: "#475569", lineHeight: 1.6 }}>
-            Liên hệ quản trị viên để nhận tài khoản
-          </div>
+          {mode === "register" && <div style={{ marginTop: 10, fontSize: 10, color: "#475569", lineHeight: 1.6 }}>
+            Tài khoản mới sẽ có quyền "Người xem". Liên hệ quản trị viên để nâng quyền.
+          </div>}
         </div>
       </div>
     </div>
@@ -1110,156 +1123,251 @@ export default function App() {
 
         {/* ── OVERVIEW TAB ── */}
         {dashTab === "overview" && <>
-          {/* ROW 1: Summary Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #2563EB" }}>
-              <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📐 Shop Drawings (SDs)</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{sdItemsDash.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{sdPct2}% Đã duyệt</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{sdPendPct}% Đang xử lý</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#DC2626" }}>🔴</span><span style={{ color: "#CBD5E1" }}>{sdOverduePct}% Trễ hạn</span></div>
+          {/* ══ HEADER: Project Info + Assessment ══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10 }}>
+            <div style={{ background: "#1E293B", borderRadius: 10, padding: "14px 18px" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#F1F5F9", marginBottom: 6 }}>BÁO CÁO THEO DÕI RFI & TIẾN ĐỘ SHOPDRAWING</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, fontSize: 11, color: "#94A3B8" }}>
+                <div><span style={{ color: "#64748B" }}>DỰ ÁN:</span> Wealthcons</div>
+                <div><span style={{ color: "#64748B" }}>CẬP NHẬT:</span> {fmFull(td())}</div>
               </div>
             </div>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #7C3AED" }}>
-              <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📝 RFIs</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: "#8B5CF6", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{rfiItemsDash.length} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#059669" }}>✅</span><span style={{ color: "#CBD5E1" }}>{rfiClosedPct}% Đã đóng</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#D97706" }}>⏳</span><span style={{ color: "#CBD5E1" }}>{rfiOpenPct}% Đang mở</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span style={{ color: "#DC2626" }}>🔴</span><span style={{ color: "#CBD5E1" }}>{rfiOverduePct}% Trễ hạn</span></div>
-              </div>
+            <div style={{ background: "#1E293B", borderRadius: 10, padding: "14px 18px", minWidth: 160 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>ĐÁNH GIÁ CHUNG</div>
+              {[["SHOPDRAWING", pct >= 80], ["RFI", rfiItemsDash.length > 0 ? rfiClosedPct >= 80 : true]].map(function(pair) {
+                var label = pair[0]; var isOk = pair[1];
+                return <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: "#CBD5E1" }}>{label}</span>
+                  <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 10, fontWeight: 700, background: isOk ? "#D1FAE5" : "#FEE2E2", color: isOk ? "#059669" : "#DC2626" }}>{isOk ? "ĐÚNG HẠN" : "CHẬM"}</span>
+                </div>;
+              })}
             </div>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #DC2626" }}>
-              <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>⚠️ Trễ hạn</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: "#DC2626", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{totalOverdue} <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Tổng</span></div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>📐</span><span style={{ color: "#CBD5E1" }}>{sdOverdue} SDs</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>📝</span><span style={{ color: "#CBD5E1" }}>{rfiOverdue} RFIs</span></div>
-              </div>
-            </div>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px 18px", borderTop: "3px solid #0891B2" }}>
-              <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 6 }}>📊 Tổng quan</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: "#0EA5E9", fontFamily: "'JetBrains Mono'", marginBottom: 10 }}>{pct}% <span style={{ fontSize: 13, fontWeight: 600, color: "#94A3B8" }}>Hoàn thành</span></div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>🏗️</span><span style={{ color: "#CBD5E1" }}>CIV: {dashItems.filter(i => i.dept === "CIV").length}</span></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><span>⚡</span><span style={{ color: "#CBD5E1" }}>MEP: {dashItems.filter(i => i.dept === "MEP").length}</span></div>
+            <div style={{ background: "#1E293B", borderRadius: 10, padding: "14px 18px", minWidth: 200 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>GHI CHÚ</div>
+              <div style={{ fontSize: 10, color: "#CBD5E1", lineHeight: 1.6 }}>
+                {totalOverdue > 0 && <div>• RFI quá hạn cần xử lý: {rfiOverdue} mục</div>}
+                {sdOverdue > 0 && <div>• SD trễ hạn: {sdOverdue} mục</div>}
+                {totalOverdue === 0 && <div>• Tất cả đang đúng tiến độ</div>}
               </div>
             </div>
           </div>
 
-          {/* ROW 2: Status + Risk */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr", gap: 10 }}>
+          {/* ══ ROW 1: Summary Cards (8 cards like reference) ══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8 }}>
+            {[
+              { icon: "📝", label: "TỔNG SỐ RFI", value: rfiItemsDash.length, sub: "100%", color: "#3B82F6", bg: "#1E3A5F" },
+              { icon: "✅", label: "RFI ĐÃ TRẢ LỜI", value: rfiClosed, sub: rfiClosedPct + "%", color: "#059669", bg: "#064E3B" },
+              { icon: "⏳", label: "RFI CHỜ TRẢ LỜI", value: rfiOpen, sub: rfiOpenPct + "%", color: "#D97706", bg: "#78350F" },
+              { icon: "⚠️", label: "RFI QUÁ HẠN", value: rfiOverdue, sub: rfiOverduePct + "%", color: "#DC2626", bg: "#7F1D1D" },
+              { icon: "📐", label: "TỔNG SỐ SD", value: sdItemsDash.length, sub: "100%", color: "#3B82F6", bg: "#1E3A5F" },
+              { icon: "✅", label: "ĐÃ PHÁT HÀNH", value: sdApproved, sub: sdPct2 + "%", color: "#059669", bg: "#064E3B" },
+              { icon: "⚙️", label: "ĐANG THỰC HIỆN", value: sdPending, sub: sdPendPct + "%", color: "#D97706", bg: "#78350F" },
+              { icon: "❌", label: "CHƯA BẮT ĐẦU", value: sdItemsDash.filter(function(i) { return i.status === "DANG_VE" && !i.actualDate; }).length, sub: (sdItemsDash.length ? Math.round(sdItemsDash.filter(function(i) { return i.status === "DANG_VE" && !i.actualDate; }).length / sdItemsDash.length * 100) : 0) + "%", color: "#DC2626", bg: "#7F1D1D" },
+            ].map(function(card, i) {
+              return <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: "12px 10px", textAlign: "center", borderBottom: "3px solid " + card.color }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{card.icon}</div>
+                <div style={{ fontSize: 8, fontWeight: 700, color: "#94A3B8", marginBottom: 4, letterSpacing: 0.5 }}>{card.label}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: card.color, fontFamily: "'JetBrains Mono'" }}>{card.value}</div>
+                <div style={{ fontSize: 10, color: "#64748B" }}>{card.sub}</div>
+              </div>;
+            })}
+          </div>
+
+          {/* ══ ROW 2: Two main panels — RFI tracking | SD tracking ══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {/* LEFT: THEO DÕI RFI */}
             <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>📐 SD Trạng thái</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <Donut data={ST.map(s => ({ l: s.l, v: sdItemsDash.filter(i => i.status === s.k).length, c: s.c }))} size={120} />
-                <div style={{ flex: 1 }}>{ST.map((s, i) => { const v = sdItemsDash.filter(it => it.status === s.k).length; if (!v) return null; return <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: s.c }} /><span style={{ color: "#94A3B8", flex: 1 }}>{s.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{v}</span></div>; })}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#F1F5F9", marginBottom: 14, paddingBottom: 8, borderBottom: "2px solid #334155" }}>THEO DÕI RFI</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: 14 }}>
+                {/* RFI Status Donut */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>TRẠNG THÁI RFI</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <Donut data={[
+                      { l: "Đã trả lời", v: rfiClosed, c: "#059669" },
+                      { l: "Chờ trả lời", v: rfiOpen - rfiOverdue, c: "#D97706" },
+                      { l: "Quá hạn", v: rfiOverdue, c: "#DC2626" },
+                    ]} size={100} />
+                    <div style={{ fontSize: 10 }}>
+                      {[
+                        { l: "Đã trả lời", v: rfiClosed, p: rfiClosedPct, c: "#059669" },
+                        { l: "Chờ trả lời", v: rfiOpen - rfiOverdue, p: rfiItemsDash.length ? Math.round((rfiOpen - rfiOverdue) / rfiItemsDash.length * 100) : 0, c: "#D97706" },
+                        { l: "Quá hạn", v: rfiOverdue, p: rfiOverduePct, c: "#DC2626" },
+                      ].map(function(d, i) {
+                        return <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: d.c }} />
+                          <span style={{ color: "#94A3B8" }}>{d.l} {d.v} ({d.p}%)</span>
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {/* RFI Trend chart */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>RFI THEO THỜI GIAN</div>
+                  {trendData ? <TrendChart data={trendData.series} labels={trendData.labels} h={120} /> : <div style={{ color: "#475569", fontSize: 11, padding: 20, textAlign: "center" }}>Cần 2+ tuần dữ liệu</div>}
+                  {trendData && <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 4 }}>
+                    {trendData.series.map(function(s, i) { return <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: "#94A3B8" }}><span style={{ width: 10, height: 2, background: s.color, borderRadius: 1 }} />{s.label}</div>; })}
+                  </div>}
+                </div>
+              </div>
+              {/* Root cause */}
+              {rootCauseData.length > 0 && <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #334155" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 6 }}>NGUYÊN NHÂN RFI</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {rootCauseData.map(function(rc, i) {
+                    var totalRC = rootCauseData.reduce(function(s, r) { return s + r.count; }, 0);
+                    var pctRC = totalRC ? Math.round(rc.count / totalRC * 100) : 0;
+                    return <div key={i} style={{ padding: "3px 8px", borderRadius: 12, fontSize: 10, fontWeight: 600, background: rc.bg, color: rc.c }}>{rc.l}: {rc.count} ({pctRC}%)</div>;
+                  })}
+                </div>
+              </div>}
+            </div>
+
+            {/* RIGHT: THEO DÕI TIẾN ĐỘ SHOPDRAWING */}
+            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#F1F5F9", marginBottom: 14, paddingBottom: 8, borderBottom: "2px solid #334155" }}>THEO DÕI TIẾN ĐỘ SHOPDRAWING</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: 14 }}>
+                {/* SD Status Donut */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>TÌNH TRẠNG SD</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <Donut data={[
+                      { l: "Đã phát hành", v: sdApproved, c: "#059669" },
+                      { l: "Đang thực hiện", v: sdPending, c: "#D97706" },
+                      { l: "Chưa bắt đầu", v: sdItemsDash.filter(function(i) { return i.status === "DANG_VE" && !i.actualDate; }).length, c: "#DC2626" },
+                    ]} size={100} />
+                    <div style={{ fontSize: 10 }}>
+                      {[
+                        { l: "Đã phát hành", v: sdApproved, p: sdPct2, c: "#059669" },
+                        { l: "Đang thực hiện", v: sdPending, p: sdPendPct, c: "#D97706" },
+                        { l: "Chưa bắt đầu", v: sdItemsDash.filter(function(i) { return i.status === "DANG_VE" && !i.actualDate; }).length, p: sdItemsDash.length ? Math.round(sdItemsDash.filter(function(i) { return i.status === "DANG_VE" && !i.actualDate; }).length / sdItemsDash.length * 100) : 0, c: "#DC2626" },
+                      ].map(function(d, i) {
+                        return <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: d.c }} />
+                          <span style={{ color: "#94A3B8" }}>{d.l} {d.v} ({d.p}%)</span>
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {/* SD Progress comparison */}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>TIẾN ĐỘ SD</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 10, color: "#94A3B8" }}>Hoàn thành</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: "#059669", fontFamily: "'JetBrains Mono'" }}>{sdPct2}%</span>
+                      </div>
+                      <div style={{ height: 10, borderRadius: 5, background: "#0F172A", overflow: "hidden", marginBottom: 10 }}>
+                        <div style={{ height: "100%", width: sdPct2 + "%", background: "linear-gradient(90deg, #059669, #34D399)", borderRadius: 5 }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 10, color: "#94A3B8" }}>Đang xử lý</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: "#D97706", fontFamily: "'JetBrains Mono'" }}>{sdPendPct}%</span>
+                      </div>
+                      <div style={{ height: 10, borderRadius: 5, background: "#0F172A", overflow: "hidden", marginBottom: 10 }}>
+                        <div style={{ height: "100%", width: sdPendPct + "%", background: "linear-gradient(90deg, #D97706, #FBBF24)", borderRadius: 5 }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 10, color: "#94A3B8" }}>Trễ hạn</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: "#DC2626", fontFamily: "'JetBrains Mono'" }}>{sdOverduePct}%</span>
+                      </div>
+                      <div style={{ height: 10, borderRadius: 5, background: "#0F172A", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: sdOverduePct + "%", background: "linear-gradient(90deg, #DC2626, #F87171)", borderRadius: 5 }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* SD by category */}
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #334155" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 6 }}>TIẾN ĐỘ THEO HẠNG MỤC</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                    <thead><tr style={{ background: "#0F172A" }}>
+                      {["Hạng mục", "Tổng số", "Hoàn thành", "Đang xử lý", "Trễ"].map(function(h, i) {
+                        return <th key={i} style={{ padding: "6px 8px", textAlign: "left", fontWeight: 600, color: "#94A3B8", borderBottom: "1px solid #334155" }}>{h}</th>;
+                      })}
+                    </tr></thead>
+                    <tbody>{Object.entries(stats.bC).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 6).map(function(pair, i) {
+                      var cat = pair[0]; var total = pair[1];
+                      var catItems = sdItemsDash.filter(function(it) { return it.cat === cat; });
+                      var catDone = catItems.filter(function(it) { return isDone(it); }).length;
+                      var catLate = catItems.filter(function(it) { return rsk(it) === "late"; }).length;
+                      var catPending = total - catDone - catLate;
+                      return <tr key={i} style={{ borderBottom: "1px solid #1E293B" }}>
+                        <td style={{ padding: "5px 8px", fontWeight: 600 }}>{cat}</td>
+                        <td style={{ padding: "5px 8px" }}>{total}</td>
+                        <td style={{ padding: "5px 8px", color: "#059669", fontWeight: 700 }}>{catDone}</td>
+                        <td style={{ padding: "5px 8px", color: "#D97706" }}>{catPending > 0 ? catPending : 0}</td>
+                        <td style={{ padding: "5px 8px", color: catLate > 0 ? "#DC2626" : "#64748B", fontWeight: catLate > 0 ? 700 : 400 }}>{catLate}</td>
+                      </tr>;
+                    })}</tbody>
+                  </table>
+                </div>
               </div>
             </div>
-            {/* Root Cause Panel - NEW */}
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>🔍 Nguyên nhân RFI</div>
-              {rootCauseData.length === 0 ? <div style={{ color: "#475569", fontSize: 12, padding: 16, textAlign: "center" }}>Chưa phân loại nguyên nhân</div> :
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {rootCauseData.map((rc, i) => {
-                    const totalRC = rootCauseData.reduce((s, r) => s + r.count, 0);
-                    const pctRC = totalRC ? Math.round(rc.count / totalRC * 100) : 0;
-                    return (
-                      <div key={i}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                          <span style={{ fontSize: 11, color: "#94A3B8" }}>{rc.l}</span>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: rc.c, fontFamily: "'JetBrains Mono'" }}>{rc.count} ({pctRC}%)</span>
-                        </div>
-                        <div style={{ height: 6, borderRadius: 3, background: "#0F172A", overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${pctRC}%`, background: rc.c, borderRadius: 3 }} />
-                        </div>
-                      </div>
-                    );
-                  })}
+          </div>
+
+          {/* ══ ROW 3: Bottom panels ══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {/* RFI Overdue list */}
+            <div style={{ background: "#1E293B", borderRadius: 10, padding: 14, borderLeft: "3px solid #DC2626" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 8 }}>DANH SÁCH RFI QUÁ HẠN ({alerts.filter(function(i) { return i.type === "RFI"; }).length})</div>
+              {!alerts.filter(function(i) { return i.type === "RFI"; }).length ? <div style={{ fontSize: 12, color: "#64748B", padding: 16, textAlign: "center" }}>Không có RFI quá hạn 🎉</div> :
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                    <thead><tr style={{ background: "#0F172A" }}>
+                      {["", "Mã RFI", "Nội dung", "Gửi ngày", "Hạn", "Quá hạn"].map(function(h, i) {
+                        return <th key={i} style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#94A3B8", borderBottom: "1px solid #334155", whiteSpace: "nowrap" }}>{h}</th>;
+                      })}
+                    </tr></thead>
+                    <tbody>{alerts.filter(function(i) { return i.type === "RFI"; }).slice(0, 10).map(function(it, i) {
+                      var delay = ld(it);
+                      return <tr key={it.id} onClick={function() { setDetId(it.id); }} style={{ cursor: "pointer", borderBottom: "1px solid #1E293B" }} onMouseEnter={function(e) { e.currentTarget.style.background = "#0F172A"; }} onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                        <td style={{ padding: "5px 6px" }}>{i + 1}</td>
+                        <td style={{ padding: "5px 6px", fontWeight: 700, fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap" }}>{it.code}</td>
+                        <td style={{ padding: "5px 6px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</td>
+                        <td style={{ padding: "5px 6px", fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap" }}>{fm(it.actualDate)}</td>
+                        <td style={{ padding: "5px 6px", fontFamily: "'JetBrains Mono'", whiteSpace: "nowrap" }}>{fm(apprPlan(it))}</td>
+                        <td style={{ padding: "5px 6px" }}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "#FEE2E2", color: "#DC2626" }}>{delay > 0 ? delay + " ngày" : "—"}</span></td>
+                      </tr>;
+                    })}</tbody>
+                  </table>
                 </div>}
             </div>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>🎯 Theo rủi ro</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <Donut data={rData} size={110} />
-                <div style={{ flex: 1 }}>{rData.filter(d => d.v > 0).map((d, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, marginBottom: 3 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: d.c, flexShrink: 0 }} /><span style={{ color: "#94A3B8", flex: 1 }}>{d.l}</span><span style={{ fontWeight: 700, fontFamily: "'JetBrains Mono'", color: "#F1F5F9" }}>{d.v}</span></div>)}</div>
-              </div>
-            </div>
-          </div>
 
-          {/* Progress bar */}
-          <div style={{ background: "#1E293B", borderRadius: 10, padding: "12px 14px" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", marginBottom: 8 }}>📈 Tiến độ chung</div>
-            <Seg data={sData} h={24} />
-            <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>{sData.filter(d => d.v > 0).map((d, i) => <span key={i} style={{ fontSize: 10, color: "#94A3B8", display: "flex", alignItems: "center", gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: d.c }} />{d.l}({d.v})</span>)}</div>
-          </div>
-
-          {/* ROW: Aging + Avg Review + Block/HM/Người vẽ */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>⏰ Tuổi items trễ</div>
-              {(() => {
-                const labels = ["0–3 ngày", "4–7 ngày", "8–14 ngày", ">14 ngày"];
-                const colors = ["#3B82F6", "#F59E0B", "#EA580C", "#DC2626"];
-                const mx = Math.max(...aging, 1);
-                return <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-around", height: 120, gap: 6, paddingTop: 10 }}>
-                  {aging.map((v, i) => <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 4 }}>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: colors[i], fontFamily: "'JetBrains Mono'" }}>{v}</span>
-                    <div style={{ width: "100%", maxWidth: 36, height: `${Math.max(v / mx * 80, 4)}px`, background: colors[i], borderRadius: 4 }} />
-                    <span style={{ fontSize: 8, color: "#64748B", textAlign: "center", lineHeight: 1.2 }}>{labels[i]}</span>
-                  </div>)}
-                </div>;
-              })()}
-            </div>
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>⏱️ Thời gian xử lý TB (ngày)</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
-                {[{ l: "Tất cả", v: avgReview.all, c: "#3B82F6" }, { l: "CIV", v: avgReview.civ, c: "#F59E0B" }, { l: "MEP", v: avgReview.mep, c: "#06B6D4" }].map((r, i) => (
-                  <div key={i}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                      <span style={{ fontSize: 11, color: "#94A3B8" }}>{r.l}</span>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: r.c, fontFamily: "'JetBrains Mono'" }}>{r.v}</span>
-                    </div>
-                    <div style={{ height: 8, borderRadius: 4, background: "#0F172A", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(r.v / 15 * 100, 100)}%`, background: r.c, borderRadius: 4 }} />
-                    </div>
+            {/* Response time + Block/Người vẽ charts */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {/* Response time by owner */}
+              <div style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 8 }}>THỜI GIAN PHẢN HỒI RFI</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'" }}>{responseTimeAnalysis.avgResponseTime}<span style={{ fontSize: 11, color: "#64748B", fontWeight: 400 }}> ngày TB</span></div>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                    {Object.entries(responseTimeAnalysis.byOwner).map(function(pair, i) {
+                      var owner = pair[0]; var data = pair[1];
+                      return <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 8px", background: "#0F172A", borderRadius: 5, fontSize: 10 }}>
+                        <span style={{ color: "#94A3B8" }}>{owner}</span>
+                        <span style={{ fontWeight: 700, color: data.avg > 7 ? "#DC2626" : data.avg > 3 ? "#F59E0B" : "#059669", fontFamily: "'JetBrains Mono'" }}>{data.avg}d</span>
+                      </div>;
+                    })}
                   </div>
-                ))}
+                </div>
+              </div>
+              {/* Block + Người vẽ mini charts */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {[["Block", Object.entries(stats.bB), "#3B82F6"], ["Người vẽ", Object.entries(stats.bP).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 6), "#0EA5E9"]].map(function(item, i) {
+                  var title = item[0]; var d = item[1]; var c = item[2];
+                  return <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", marginBottom: 6 }}>{title}</div>
+                    {d.length ? <Bar data={d.map(function(pair) { return { l: pair[0], v: pair[1], c: c }; })} h={100} /> : <div style={{ color: "#475569", fontSize: 11, textAlign: "center" }}>Trống</div>}
+                  </div>;
+                })}
               </div>
             </div>
-            {/* Response Time by Owner - NEW */}
-            <div style={{ background: "#1E293B", borderRadius: 10, padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 12, borderBottom: "2px solid #334155", paddingBottom: 6 }}>🔎 Thời gian phản hồi RFI</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "#3B82F6", fontFamily: "'JetBrains Mono'", marginBottom: 8 }}>{responseTimeAnalysis.avgResponseTime} <span style={{ fontSize: 11, color: "#64748B", fontWeight: 400 }}>ngày TB</span></div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {Object.entries(responseTimeAnalysis.byOwner).map(([owner, data], i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#0F172A", borderRadius: 6 }}>
-                    <span style={{ fontSize: 11, color: "#94A3B8" }}>{owner}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: data.avg > 7 ? "#DC2626" : data.avg > 3 ? "#F59E0B" : "#059669", fontFamily: "'JetBrains Mono'" }}>{data.avg}d ({data.count})</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* ROW: Block + HM + Người vẽ */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            {[["Block", Object.entries(stats.bB), "#3B82F6"], ["Hạng mục", Object.entries(stats.bC), "#8B5CF6"], ["Người vẽ", Object.entries(stats.bP).sort((a, b) => b[1] - a[1]).slice(0, 8), "#0EA5E9"]].map(([t, d, c], i) =>
-              <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: 14 }}><div style={{ fontSize: 13, fontWeight: 700, color: "#CBD5E1", marginBottom: 10, borderBottom: "2px solid #334155", paddingBottom: 6 }}>{t}</div>{d.length ? <Bar data={d.map(([k, v]) => ({ l: k, v, c }))} /> : <div style={{ color: "#475569", fontSize: 12, padding: 16, textAlign: "center" }}>Trống</div>}</div>)}
-          </div>
-
-          {/* Alerts */}
-          <div style={{ background: "#1E293B", borderRadius: 10, padding: 14, borderLeft: "3px solid #EF4444" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#EF4444", marginBottom: 8 }}>⚠️ Cảnh báo ({alerts.length})</div>
-            {!alerts.length ? <div style={{ fontSize: 12, color: "#64748B" }}>Không có item trễ 🎉</div> :
-              <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
-                {alerts.map(it => { const r = rsk(it), rc = RC[r], l = ld(it); return (
-                  <div key={it.id} onClick={() => setDetId(it.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "#0F172A", borderRadius: 7, cursor: "pointer" }}>
-                    <span>{rc.i}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600 }}><span style={{ opacity: .5, fontSize: 10, marginRight: 3 }}>{it.type}</span>{it.code} · {it.name}</div><div style={{ fontSize: 10, color: "#64748B" }}>{it.dept} · {it.block} · {it.who} · KH: {fm(it.planDate)}</div></div>
-                    {l > 0 && <Bd c={rc.c} bg={rc.bg}>{r === "late" ? `Trễ ${l}d` : "≤3d"}</Bd>}
-                  </div>); })}</div>}
           </div>
         </>}
 
